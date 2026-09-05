@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+env/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Runtime / generated output
+output/*.json
+output/*.jsonl
+output/*.csv
+output/*.log
+
+# OpenClaw runtime state
+openclaw-workspace-state.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Temporary development backups
+*.bak
+*.before_fix
+
+# Development snapshot files
+*.before_*
+*.working
+
+# Development snapshot files using hyphen suffix
+*.before-*
