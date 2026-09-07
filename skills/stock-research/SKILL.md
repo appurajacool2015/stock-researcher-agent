@@ -328,3 +328,38 @@ Then:
 7. Return a factual research response based only on the ResearchResult.
 
 For downstream Stock Analyst processing, preserve the complete ResearchResult JSON.
+
+---
+
+# NON-NEGOTIABLE HANDOFF CONTRACT — DIRECT RESEARCH RESULT ONLY
+
+## Purpose
+
+This skill is executed by OpenClaw's `stock-researcher` agent when another agent delegates stock research.
+
+The deterministic Python research interface is the **only producer of the research result**.
+
+The agent must execute the interface and return the actual `ResearchResult` JSON directly to the calling agent.
+
+## ABSOLUTE PROHIBITION: DO NOT CREATE HANDOFF FILES
+
+The `stock-researcher` agent MUST NOT create, write, modify, or generate:
+
+- `research_result.json`
+- `result.json`
+- `handoff.json`
+- `status.json`
+- `research-status.json`
+- any temporary status/handoff/result file
+- any manually constructed substitute for the deterministic ResearchResult
+
+Do NOT use the `write` tool to create a handoff/status/result file.
+
+Do NOT create a file containing fields such as:
+
+```json
+{
+  "skill_started": true,
+  "interface_executed": true,
+  "result_file_created": true
+}
