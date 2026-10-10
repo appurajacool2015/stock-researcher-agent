@@ -1,0 +1,217 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ResearchResult",
+  "description": "Stock Research Intelligence Canonical Evidence Contract v1.0",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "research_id",
+    "symbol",
+    "exchange",
+    "company_name",
+    "symbol_match_confidence",
+    "requested_at",
+    "completed_at",
+    "overall_status",
+    "fundamentals",
+    "technicals",
+    "institutional",
+    "news",
+    "sources",
+    "errors",
+    "data_quality_summary"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["1.0"]
+    },
+    "research_id": {
+      "type": "string"
+    },
+    "symbol": {
+      "type": "string"
+    },
+    "exchange": {
+      "type": "string"
+    },
+    "isin": {
+      "type": ["string", "null"]
+    },
+    "company_name": {
+      "type": "string"
+    },
+    "symbol_match_confidence": {
+      "type": "string",
+      "enum": ["EXACT", "FUZZY", "AMBIGUOUS"]
+    },
+    "requested_at": {
+      "type": "string"
+    },
+    "completed_at": {
+      "type": "string"
+    },
+    "overall_status": {
+      "type": "string",
+      "enum": ["COMPLETE", "PARTIAL", "FAILED", "SUCCESS"]
+    },
+    "fundamentals": {
+      "type": "object",
+      "required": [
+        "provenance",
+        "pe_ratio",
+        "pb_ratio",
+        "roce",
+        "roe",
+        "debt_to_equity",
+        "sales_growth_3y_cagr",
+        "profit_growth_3y_cagr",
+        "market_cap"
+      ],
+      "properties": {
+        "provenance": { "$ref": "#/definitions/provenance" },
+        "pe_ratio": { "$ref": "#/definitions/datapoint" },
+        "pb_ratio": { "$ref": "#/definitions/datapoint" },
+        "roce": { "$ref": "#/definitions/datapoint" },
+        "roe": { "$ref": "#/definitions/datapoint" },
+        "debt_to_equity": { "$ref": "#/definitions/datapoint" },
+        "sales_growth_3y_cagr": { "$ref": "#/definitions/datapoint" },
+        "profit_growth_3y_cagr": { "$ref": "#/definitions/datapoint" },
+        "market_cap": { "$ref": "#/definitions/datapoint" }
+      }
+    },
+    "technicals": {
+      "type": "object",
+      "required": [
+        "provenance",
+        "cmp",
+        "dma_50",
+        "dma_200",
+        "above_50_dma",
+        "above_200_dma",
+        "rsi_14",
+        "volume",
+        "avg_volume_1w",
+        "avg_volume_1m",
+        "volume_vs_1w_pct",
+        "volume_vs_1m_pct",
+        "volume_above_1w",
+        "volume_above_1m",
+        "volume_traction",
+        "fifty_two_week_high",
+        "fifty_two_week_low"
+      ],
+      "properties": {
+        "provenance": { "$ref": "#/definitions/provenance" },
+        "cmp": { "$ref": "#/definitions/datapoint" },
+        "dma_50": { "$ref": "#/definitions/datapoint" },
+        "dma_200": { "$ref": "#/definitions/datapoint" },
+        "above_50_dma": { "$ref": "#/definitions/datapoint" },
+        "above_200_dma": { "$ref": "#/definitions/datapoint" },
+        "rsi_14": { "$ref": "#/definitions/datapoint" },
+        "volume": { "$ref": "#/definitions/datapoint" },
+        "avg_volume_1w": { "$ref": "#/definitions/datapoint" },
+        "avg_volume_1m": { "$ref": "#/definitions/datapoint" },
+        "volume_vs_1w_pct": { "$ref": "#/definitions/datapoint" },
+        "volume_vs_1m_pct": { "$ref": "#/definitions/datapoint" },
+        "volume_above_1w": { "$ref": "#/definitions/datapoint" },
+        "volume_above_1m": { "$ref": "#/definitions/datapoint" },
+        "volume_traction": { "$ref": "#/definitions/datapoint" },
+        "fifty_two_week_high": { "$ref": "#/definitions/datapoint" },
+        "fifty_two_week_low": { "$ref": "#/definitions/datapoint" }
+      }
+    },
+    "institutional": {
+      "type": "object",
+      "required": [
+        "provenance",
+        "promoter_holding_pct",
+        "promoter_holding_change_qoq",
+        "promoter_pledge_pct",
+        "fii_holding_pct",
+        "fii_holding_change_qoq",
+        "dii_holding_pct",
+        "dii_holding_change_qoq"
+      ],
+      "properties": {
+        "provenance": { "$ref": "#/definitions/provenance" },
+        "promoter_holding_pct": { "$ref": "#/definitions/datapoint" },
+        "promoter_holding_change_qoq": { "$ref": "#/definitions/datapoint" },
+        "promoter_pledge_pct": { "$ref": "#/definitions/datapoint" },
+        "fii_holding_pct": { "$ref": "#/definitions/datapoint" },
+        "fii_holding_change_qoq": { "$ref": "#/definitions/datapoint" },
+        "dii_holding_pct": { "$ref": "#/definitions/datapoint" },
+        "dii_holding_change_qoq": { "$ref": "#/definitions/datapoint" }
+      }
+    },
+    "news": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["headline", "provenance"],
+        "properties": {
+          "headline": { "type": "string" },
+          "summary": { "type": ["string", "null"] },
+          "published_at": { "type": ["string", "null"] },
+          "provenance": { "$ref": "#/definitions/provenance" }
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "status", "fields_sourced", "retrieved_at"],
+        "properties": {
+          "source": { "type": "string" },
+          "status": { "type": "string" },
+          "fields_sourced": { "type": "integer" },
+          "source_url": { "type": ["string", "null"] },
+          "retrieved_at": { "type": "string" },
+          "as_of_date": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "errors": {
+      "type": "array"
+    },
+    "data_quality_summary": {
+      "type": "object",
+      "properties": {
+        "verified": { "type": "integer" },
+        "derived": { "type": "integer" },
+        "unavailable": { "type": "integer" },
+        "stale": { "type": "integer" },
+        "conflicting": { "type": "integer" },
+        "failed": { "type": "integer" }
+      }
+    }
+  },
+  "definitions": {
+    "provenance": {
+      "type": "object",
+      "required": ["source", "retrieved_at"],
+      "properties": {
+        "source": { "type": "string" },
+        "source_url": { "type": ["string", "null"] },
+        "retrieved_at": { "type": ["string", "null"] },
+        "as_of_date": { "type": ["string", "null"] }
+      }
+    },
+    "datapoint": {
+      "type": "object",
+      "required": ["unit", "status", "provenance"],
+      "properties": {
+        "value": {},
+        "unit": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["VERIFIED", "DERIVED", "UNAVAILABLE", "STALE", "CONFLICTING", "FAILED"]
+        },
+        "provenance": { "$ref": "#/definitions/provenance" },
+        "conflicting_values": { "type": "array" },
+        "notes": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
