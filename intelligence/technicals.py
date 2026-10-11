@@ -24,14 +24,15 @@ This module:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
-import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+import sys
+from typing import Any, Dict, List, Optional, Tuple
 
 
 MODULE_NAME = "technicals"
-MODULE_VERSION = "1.0"
+MODULE_VERSION = "2.0"
 
 
 # ---------------------------------------------------------------------------
@@ -103,15 +104,18 @@ def _fact(
         }
 
     value = raw.get("value")
+    unit = raw.get("unit")
 
-    if raw.get("unit") == "BOOLEAN":
+    if unit == "BOOLEAN":
         normalized_value = _boolean(value)
+    elif unit in {"TEXT", "DATE"}:
+        normalized_value = str(value) if value is not None else None
     else:
         normalized_value = _number(value)
 
     return {
         "value": normalized_value,
-        "unit": raw.get("unit"),
+        "unit": unit,
         "status": raw.get("status", "UNAVAILABLE"),
         "provenance": raw.get("provenance"),
         "notes": raw.get("notes"),
@@ -753,6 +757,88 @@ def analyze_technicals(
         )
 
     # -----------------------------------------------------------------------
+    # Stage 2 Decision Engine & Classification
+    # -----------------------------------------------------------------------
+
+    classification, reason_codes, positive_factors, cautionary_factors, risk_flags = (
+        _evaluate_classification(technicals)
+    )
+
+    key_levels = _derive_key_levels(cmp["value"], technicals)
+
+    stage1_facts_count = sum(
+        1
+        for k in [
+            "dma_slope_50",
+            "obv_change_norm_14d",
+            "clv_14_avg",
+            "atr_14",
+            "swing_high_20",
+        ]
+        if _fact(technicals, k)["value"] is not None
+        and _fact(technicals, k)["status"] != "UNAVAILABLE"
+    )
+
+    history_bars_fact = _fact(technicals, "history_bars")
+    history_bars_val = (
+        int(history_bars_fact["value"])
+        if history_bars_fact["value"] is not None
+        else None
+    )
+    if history_bars_val is None and dma_200["value"] is not None and dma_200["status"] == "VERIFIED":
+        history_bars_val = 200
+
+    confidence = _calculate_confidence(
+        classification=classification,
+        history_bars=history_bars_val,
+        cmp_fact=cmp,
+        dma_50_fact=dma_50,
+        dma_200_fact=dma_200,
+        rsi_fact=rsi_14,
+        volume_fact=volume,
+        stage1_facts_available=stage1_facts_count,
+    )
+
+    swing_high_fact = _fact(technicals, "swing_high_20")
+    pct_from_swing_high_fact = _fact(technicals, "pct_from_swing_high")
+    pct_swing_high = pct_from_swing_high_fact["value"]
+    if pct_swing_high is None and cmp["value"] is not None and swing_high_fact["value"] is not None and swing_high_fact["value"] > 0:
+        pct_swing_high = round(((cmp["value"] - swing_high_fact["value"]) / swing_high_fact["value"]) * 100, 2)
+
+    score = _calculate_score(
+        classification=classification,
+        cmp_val=cmp["value"],
+        dma_50_val=dma_50["value"],
+        dma_200_val=dma_200["value"],
+        dma_align_val=_fact(technicals, "dma_alignment")["value"],
+        dma_slope_50_val=_fact(technicals, "dma_slope_50")["value"],
+        rsi_val=rsi_14["value"],
+        obv_val=_fact(technicals, "obv_change_norm_14d")["value"],
+        clv_avg_val=_fact(technicals, "clv_14_avg")["value"],
+        high_52w_val=fifty_two_week_high["value"],
+        low_52w_val=fifty_two_week_low["value"],
+        pct_from_swing_high=pct_swing_high,
+    )
+
+    assessment_timestamp = datetime.now(timezone.utc).isoformat()
+
+    # Preserve overall_bias compatibility
+    if classification == "INSUFFICIENT_DATA":
+        overall_bias = "INSUFFICIENT_DATA"
+    elif overall_score is not None:
+        overall_bias = _bias(overall_score)
+    else:
+        if score is not None:
+            if score >= 30.0:
+                overall_bias = "POSITIVE"
+            elif score <= -30.0:
+                overall_bias = "NEGATIVE"
+            else:
+                overall_bias = "MIXED"
+        else:
+            overall_bias = "INSUFFICIENT_DATA"
+
+    # -----------------------------------------------------------------------
     # Return structured intelligence
     # -----------------------------------------------------------------------
 
@@ -761,8 +847,16 @@ def analyze_technicals(
         "version": MODULE_VERSION,
         "symbol": research_result.get("symbol"),
         "company_name": research_result.get("company_name"),
+        "classification": classification,
+        "score": score,
+        "confidence": confidence,
+        "reason_codes": reason_codes,
+        "positive_factors": positive_factors,
+        "cautionary_factors": cautionary_factors,
+        "risk_flags": risk_flags,
+        "key_levels": key_levels,
+        "assessment_timestamp": assessment_timestamp,
         "overall_bias": overall_bias,
-        "score": overall_score,
         "as_of_date": (
             technicals
             .get("provenance", {})
@@ -794,6 +888,582 @@ def analyze_technicals(
         "reasons": reasons,
         "limitations": limitations,
     }
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 Helper Functions
+# ---------------------------------------------------------------------------
+
+def _derive_key_levels(
+    cmp_val: Optional[float],
+    technicals: Dict[str, Any],
+) -> Dict[str, Optional[Dict[str, Any]]]:
+    """
+    Derive immediate deterministic support and resistance reference levels.
+    Levels must come directly from data without fabricating prices.
+    """
+    if cmp_val is None:
+        return {
+            "support_reference": None,
+            "resistance_reference": None,
+        }
+
+    swing_low = _fact(technicals, "swing_low_20")
+    swing_high = _fact(technicals, "swing_high_20")
+    dma_50 = _fact(technicals, "dma_50")
+    dma_200 = _fact(technicals, "dma_200")
+    high_52w = _fact(technicals, "fifty_two_week_high")
+    low_52w = _fact(technicals, "fifty_two_week_low")
+
+    # Potential supports (must be <= cmp_val)
+    support_candidates: List[Dict[str, Any]] = []
+    if (
+        swing_low["value"] is not None
+        and swing_low["status"] != "UNAVAILABLE"
+        and swing_low["value"] <= cmp_val
+    ):
+        support_candidates.append(
+            {"level": float(swing_low["value"]), "type": "SWING_LOW_20D"}
+        )
+    if (
+        dma_50["value"] is not None
+        and dma_50["status"] != "UNAVAILABLE"
+        and dma_50["value"] <= cmp_val
+    ):
+        support_candidates.append(
+            {"level": float(dma_50["value"]), "type": "DMA_50"}
+        )
+    if (
+        dma_200["value"] is not None
+        and dma_200["status"] != "UNAVAILABLE"
+        and dma_200["value"] <= cmp_val
+    ):
+        support_candidates.append(
+            {"level": float(dma_200["value"]), "type": "DMA_200"}
+        )
+    if (
+        low_52w["value"] is not None
+        and low_52w["status"] != "UNAVAILABLE"
+        and low_52w["value"] <= cmp_val
+    ):
+        support_candidates.append(
+            {"level": float(low_52w["value"]), "type": "52_WEEK_LOW"}
+        )
+
+    support_reference = (
+        max(support_candidates, key=lambda x: x["level"])
+        if support_candidates
+        else None
+    )
+
+    # Potential resistances (must be >= cmp_val)
+    resistance_candidates: List[Dict[str, Any]] = []
+    if (
+        swing_high["value"] is not None
+        and swing_high["status"] != "UNAVAILABLE"
+        and swing_high["value"] >= cmp_val
+    ):
+        resistance_candidates.append(
+            {"level": float(swing_high["value"]), "type": "SWING_HIGH_20D"}
+        )
+    if (
+        dma_50["value"] is not None
+        and dma_50["status"] != "UNAVAILABLE"
+        and dma_50["value"] >= cmp_val
+    ):
+        resistance_candidates.append(
+            {"level": float(dma_50["value"]), "type": "DMA_50"}
+        )
+    if (
+        dma_200["value"] is not None
+        and dma_200["status"] != "UNAVAILABLE"
+        and dma_200["value"] >= cmp_val
+    ):
+        resistance_candidates.append(
+            {"level": float(dma_200["value"]), "type": "DMA_200"}
+        )
+    if (
+        high_52w["value"] is not None
+        and high_52w["status"] != "UNAVAILABLE"
+        and high_52w["value"] >= cmp_val
+    ):
+        resistance_candidates.append(
+            {"level": float(high_52w["value"]), "type": "52_WEEK_HIGH"}
+        )
+
+    resistance_reference = (
+        min(resistance_candidates, key=lambda x: x["level"])
+        if resistance_candidates
+        else None
+    )
+
+    return {
+        "support_reference": support_reference,
+        "resistance_reference": resistance_reference,
+    }
+
+
+def _calculate_score(
+    classification: str,
+    cmp_val: Optional[float],
+    dma_50_val: Optional[float],
+    dma_200_val: Optional[float],
+    dma_align_val: Optional[str],
+    dma_slope_50_val: Optional[str],
+    rsi_val: Optional[float],
+    obv_val: Optional[float],
+    clv_avg_val: Optional[float],
+    high_52w_val: Optional[float],
+    low_52w_val: Optional[float],
+    pct_from_swing_high: Optional[float],
+) -> Optional[float]:
+    """
+    Calculate deterministic technical score strictly bounded between -100.0 and +100.0.
+    Returns None for INSUFFICIENT_DATA.
+    """
+    if classification == "INSUFFICIENT_DATA" or cmp_val is None:
+        return None
+
+    score = 0.0
+
+    # 1. Trend & Structure Component (±40 points max)
+    if dma_200_val is not None:
+        score += 15.0 if cmp_val > dma_200_val else -15.0
+
+    if dma_align_val == "50_DMA_ABOVE_200_DMA" or (
+        dma_50_val is not None and dma_200_val is not None and dma_50_val > dma_200_val
+    ):
+        score += 15.0
+    elif dma_align_val == "50_DMA_BELOW_200_DMA" or (
+        dma_50_val is not None and dma_200_val is not None and dma_50_val < dma_200_val
+    ):
+        score -= 15.0
+
+    if dma_slope_50_val == "RISING":
+        score += 10.0
+    elif dma_slope_50_val == "FALLING":
+        score -= 10.0
+
+    # 2. Momentum Component (±25 points max)
+    if rsi_val is not None:
+        if 55.0 <= rsi_val <= 68.0:
+            score += 25.0
+        elif 45.0 <= rsi_val < 55.0:
+            score += 15.0
+        elif 68.0 < rsi_val <= 72.0:
+            score += 5.0
+        elif rsi_val > 72.0:
+            score -= 15.0
+        elif 30.0 <= rsi_val < 45.0:
+            score -= 15.0
+        elif rsi_val < 30.0:
+            score -= 20.0
+
+    # 3. Volume Flow Component (±20 points max)
+    if obv_val is not None:
+        if obv_val > 0.10:
+            score += 10.0
+        elif obv_val < -0.10:
+            score -= 10.0
+
+    if clv_avg_val is not None:
+        if clv_avg_val > 0.10:
+            score += 10.0
+        elif clv_avg_val < -0.10:
+            score -= 10.0
+
+    # 4. Range & Resistance Runway Component (±15 points max)
+    if high_52w_val is not None and low_52w_val is not None and high_52w_val > low_52w_val:
+        pos_pct = ((cmp_val - low_52w_val) / (high_52w_val - low_52w_val)) * 100.0
+        if pos_pct > 75.0:
+            score += 10.0
+        elif pos_pct < 25.0:
+            score -= 10.0
+
+    if pct_from_swing_high is not None:
+        if -1.5 <= pct_from_swing_high <= 0.0:
+            score -= 5.0
+        else:
+            score += 5.0
+
+    clamped = max(-100.0, min(100.0, score))
+    return round(clamped, 2)
+
+
+def _calculate_confidence(
+    classification: str,
+    history_bars: Optional[int],
+    cmp_fact: Dict[str, Any],
+    dma_50_fact: Dict[str, Any],
+    dma_200_fact: Dict[str, Any],
+    rsi_fact: Dict[str, Any],
+    volume_fact: Dict[str, Any],
+    stage1_facts_available: int,
+) -> str:
+    """
+    Derive deterministic confidence based on evidence completeness.
+    """
+    if classification == "INSUFFICIENT_DATA":
+        return "LOW"
+
+    if (
+        history_bars is not None
+        and history_bars >= 200
+        and cmp_fact["value"] is not None
+        and dma_50_fact["value"] is not None
+        and dma_200_fact["value"] is not None
+        and rsi_fact["value"] is not None
+        and volume_fact["value"] is not None
+        and stage1_facts_available >= 4
+    ):
+        return "HIGH"
+
+    return "MEDIUM"
+
+
+def _evaluate_classification(
+    technicals: Dict[str, Any],
+) -> Tuple[str, List[str], List[str], List[str], List[str]]:
+    """
+    Evaluate deterministic classification according to strict precedence:
+    1. INSUFFICIENT_DATA
+    2. REDUCE_SELL_CANDIDATE
+    3. AVOID_NEW_ENTRY
+    4. BUY_CANDIDATE
+    5. WAIT_AND_WATCH
+
+    Returns: (classification, reason_codes, positive_factors, cautionary_factors, risk_flags)
+    """
+    cmp_fact = _fact(technicals, "cmp")
+    dma_50_fact = _fact(technicals, "dma_50")
+    dma_200_fact = _fact(technicals, "dma_200")
+    history_bars_fact = _fact(technicals, "history_bars")
+
+    history_bars = (
+        int(history_bars_fact["value"])
+        if history_bars_fact["value"] is not None
+        else None
+    )
+    if history_bars is None and dma_200_fact["value"] is not None and dma_200_fact["status"] == "VERIFIED":
+        history_bars = 200
+
+    cmp_val = cmp_fact["value"]
+    dma_50_val = dma_50_fact["value"]
+    dma_200_val = dma_200_fact["value"]
+
+    # -----------------------------------------------------------------------
+    # Rule 1 — INSUFFICIENT_DATA
+    # -----------------------------------------------------------------------
+    rule1_reasons = []
+    if history_bars is None or history_bars < 200:
+        rule1_reasons.append("INSUFFICIENT_HISTORY_BARS")
+    if cmp_val is None or cmp_fact["status"] == "UNAVAILABLE":
+        rule1_reasons.append("CRITICAL_METRIC_UNAVAILABLE_CMP")
+    if dma_50_val is None or dma_50_fact["status"] == "UNAVAILABLE":
+        rule1_reasons.append("CRITICAL_METRIC_UNAVAILABLE_DMA_50")
+
+    if rule1_reasons:
+        return (
+            "INSUFFICIENT_DATA",
+            rule1_reasons,
+            [],
+            [
+                f"Trading history or critical metrics are insufficient (bars: {history_bars}, CMP: {cmp_val}, 50-DMA: {dma_50_val}) to form a reliable technical assessment."
+            ],
+            ["INSUFFICIENT_DATA", "INSUFFICIENT_HISTORY"],
+        )
+
+    # Extract Stage 1 facts
+    obv_fact = _fact(technicals, "obv_change_norm_14d")
+    crossover_type_fact = _fact(technicals, "last_crossover_type")
+    crossover_days_fact = _fact(technicals, "days_since_dma_crossover")
+    dma_slope_50_fact = _fact(technicals, "dma_slope_50")
+    volume_vs_20d_fact = _fact(technicals, "volume_vs_20d_pct")
+    clv_fact = _fact(technicals, "clv")
+    clv_14_avg_fact = _fact(technicals, "clv_14_avg")
+    rsi_fact = _fact(technicals, "rsi_14")
+    pct_from_50_dma_fact = _fact(technicals, "pct_from_50_dma")
+    swing_high_fact = _fact(technicals, "swing_high_20")
+    pct_from_swing_high_fact = _fact(technicals, "pct_from_swing_high")
+    swing_high_conf_fact = _fact(technicals, "swing_high_confirmation_date")
+    high_52w_fact = _fact(technicals, "fifty_two_week_high")
+    pct_from_52w_high_fact = _fact(technicals, "pct_from_52w_high")
+    close_below_prev_fact = _fact(technicals, "close_below_prev_close")
+
+    obv_val = obv_fact["value"]
+    crossover_type = crossover_type_fact["value"]
+    crossover_days = (
+        int(crossover_days_fact["value"])
+        if crossover_days_fact["value"] is not None
+        else None
+    )
+    dma_slope_50 = dma_slope_50_fact["value"]
+    vol_vs_20d = volume_vs_20d_fact["value"]
+    clv_val = clv_fact["value"]
+    clv_14_avg = clv_14_avg_fact["value"]
+    rsi_val = rsi_fact["value"]
+
+    pct_from_50 = pct_from_50_dma_fact["value"]
+    if pct_from_50 is None and cmp_val is not None and dma_50_val is not None and dma_50_val > 0:
+        pct_from_50 = round(((cmp_val - dma_50_val) / dma_50_val) * 100, 2)
+
+    swing_high_val = swing_high_fact["value"]
+    pct_from_swing_high = pct_from_swing_high_fact["value"]
+    if pct_from_swing_high is None and cmp_val is not None and swing_high_val is not None and swing_high_val > 0:
+        pct_from_swing_high = round(((cmp_val - swing_high_val) / swing_high_val) * 100, 2)
+
+    high_52w_val = high_52w_fact["value"]
+    pct_from_52w_high = pct_from_52w_high_fact["value"]
+    if pct_from_52w_high is None and cmp_val is not None and high_52w_val is not None and high_52w_val > 0:
+        pct_from_52w_high = round(((cmp_val - high_52w_val) / high_52w_val) * 100, 2)
+
+    close_below_prev = close_below_prev_fact["value"]
+
+    # -----------------------------------------------------------------------
+    # Rule 2 — REDUCE_SELL_CANDIDATE
+    # -----------------------------------------------------------------------
+    cond_2a = (
+        dma_200_val is not None
+        and cmp_val < dma_200_val
+        and obv_val is not None
+        and obv_val < -0.20
+    )
+
+    cond_2b = (
+        crossover_type == "DEATH_CROSS"
+        and crossover_days is not None
+        and crossover_days <= 40
+        and dma_slope_50 == "FALLING"
+    )
+
+    cond_2c = (
+        vol_vs_20d is not None
+        and vol_vs_20d > 20.0
+        and close_below_prev is True
+        and clv_val is not None
+        and clv_val < -0.50
+        and cmp_val < dma_50_val
+    )
+
+    if cond_2a or cond_2b or cond_2c:
+        r2_reasons: List[str] = []
+        r2_cautionary: List[str] = []
+        r2_flags: List[str] = []
+
+        if cond_2a:
+            r2_reasons.append("REDUCE_BREAKDOWN_BELOW_200_DMA_AND_OBV_DISTRIBUTION")
+            r2_cautionary.append(
+                f"Price breakdown: CMP ({cmp_val:.2f}) is below the 200-DMA ({dma_200_val:.2f}) with negative price/volume-flow momentum (normalized 14-session OBV change of {obv_val:.2f} < -0.20)."
+            )
+            r2_flags.append("BREAKDOWN_BELOW_200_DMA")
+            r2_flags.append("VOLUME_FLOW_DISTRIBUTION")
+
+        if cond_2b:
+            r2_reasons.append("REDUCE_RECENT_DEATH_CROSS_FALLING_50_DMA")
+            r2_cautionary.append(
+                f"Severely deteriorating trend: Active Death Cross occurred {crossover_days} sessions ago with a falling 50-DMA trendline."
+            )
+            r2_flags.append("DEATH_CROSS_ACTIVE")
+            r2_flags.append("FALLING_50_DMA")
+
+        if cond_2c:
+            r2_reasons.append("REDUCE_SEVERE_DISTRIBUTION_HIGH_VOLUME_BELOW_50_DMA")
+            r2_cautionary.append(
+                f"Severe distribution signal: Elevated volume ({vol_vs_20d:.1f}% above 20d average) on a down session with weak close location (CLV {clv_val:.2f} < -0.50) while trading below 50-DMA."
+            )
+            r2_flags.append("SEVERE_DISTRIBUTION_VOLUME")
+            r2_flags.append("BELOW_50_DMA")
+
+        r2_cautionary.append(
+            "Evidence reflects observed price/volume-flow signals. This assessment indicates elevated structural downside risk; it is not an investment guarantee."
+        )
+
+        return ("REDUCE_SELL_CANDIDATE", r2_reasons, [], r2_cautionary, r2_flags)
+
+    # -----------------------------------------------------------------------
+    # Rule 3 — AVOID_NEW_ENTRY
+    # -----------------------------------------------------------------------
+    cond_3a = (
+        dma_200_val is not None
+        and cmp_val < dma_50_val
+        and cmp_val < dma_200_val
+    )
+
+    cond_3b_extended = pct_from_50 is not None and pct_from_50 > 15.0
+    cond_3b_rsi = rsi_val is not None and rsi_val > 72.0
+    cond_3b = cond_3b_extended or cond_3b_rsi
+
+    swing_high_confirmed = (
+        swing_high_val is not None
+        and swing_high_fact["status"] != "UNAVAILABLE"
+        and swing_high_conf_fact["value"] is not None
+        and swing_high_conf_fact["status"] != "UNAVAILABLE"
+    )
+
+    near_swing_high = (
+        swing_high_confirmed
+        and pct_from_swing_high is not None
+        and -3.0 <= pct_from_swing_high <= 0.0
+    )
+
+    near_52w_high = (
+        high_52w_val is not None
+        and high_52w_fact["status"] != "UNAVAILABLE"
+        and pct_from_52w_high is not None
+        and -3.0 <= pct_from_52w_high <= 0.0
+    )
+
+    cond_3c_volume_outflow = (
+        obv_val is not None
+        and obv_val < -0.10
+        and clv_14_avg is not None
+        and clv_14_avg < 0.0
+    )
+
+    cond_3c = (near_swing_high or near_52w_high) and cond_3c_volume_outflow
+
+    if cond_3a or cond_3b or cond_3c:
+        r3_reasons: List[str] = []
+        r3_cautionary: List[str] = []
+        r3_flags: List[str] = []
+
+        if cond_3a:
+            r3_reasons.append("AVOID_CMP_BELOW_50_AND_200_DMA")
+            r3_cautionary.append(
+                f"Negative trend alignment: CMP ({cmp_val:.2f}) is below both the 50-DMA ({dma_50_val:.2f}) and 200-DMA ({dma_200_val:.2f})."
+            )
+            r3_flags.append("BELOW_50_DMA")
+            r3_flags.append("BELOW_200_DMA")
+
+        if cond_3b_extended:
+            r3_reasons.append("AVOID_EXTENDED_ABOVE_50_DMA")
+            r3_cautionary.append(
+                f"Extended price structure: CMP is {pct_from_50:.2f}% above the 50-DMA (> 15% threshold), creating elevated mean-reversion risk."
+            )
+            r3_flags.append("EXTENDED_ABOVE_50_DMA")
+
+        if cond_3b_rsi:
+            r3_reasons.append("AVOID_OVERBOUGHT_RSI")
+            r3_cautionary.append(
+                f"Overbought momentum: RSI(14) of {rsi_val:.2f} is above 72.0, indicating stretched short-term conditions."
+            )
+            r3_flags.append("OVERBOUGHT_RSI")
+
+        if cond_3c:
+            r3_reasons.append("AVOID_RESISTANCE_PROXIMITY_WITH_VOLUME_OUTFLOW")
+            res_desc = (
+                f"confirmed swing high ({swing_high_val:.2f})"
+                if near_swing_high
+                else f"52-week high ({high_52w_val:.2f})"
+            )
+            r3_cautionary.append(
+                f"Resistance proximity with price/volume-flow outflows: CMP is within 3% of {res_desc} while normalized OBV change ({obv_val:.2f}) is < -0.10 and 14d CLV average ({clv_14_avg:.2f}) is negative."
+            )
+            r3_flags.append("OVERHEAD_RESISTANCE_NEAR")
+            r3_flags.append("VOLUME_OUTFLOW_DETECTED")
+
+        r3_cautionary.append(
+            "AVOID_NEW_ENTRY indicates unfavorable risk-reward for initiating new long positions; it is not an instruction to sell existing long-term positions."
+        )
+
+        return ("AVOID_NEW_ENTRY", r3_reasons, [], r3_cautionary, r3_flags)
+
+    # -----------------------------------------------------------------------
+    # Rule 4 — BUY_CANDIDATE
+    # -----------------------------------------------------------------------
+    # Condition 1: CMP > 200-DMA and 50-DMA > 200-DMA
+    cond_4_1 = (
+        dma_200_val is not None
+        and cmp_val > dma_200_val
+        and dma_50_val > dma_200_val
+    )
+
+    # Condition 2: CMP >= 50-DMA or no more than 2% below it with RISING 50-DMA slope
+    cond_4_2 = False
+    if pct_from_50 is not None:
+        if pct_from_50 >= 0.0:
+            cond_4_2 = True
+        elif -2.0 <= pct_from_50 < 0.0 and dma_slope_50 == "RISING":
+            cond_4_2 = True
+
+    # Condition 3: CMP <= 10% above 50-DMA
+    cond_4_3 = pct_from_50 is not None and pct_from_50 <= 10.0
+
+    # Condition 4: RSI(14) between 45 and 68 inclusive
+    cond_4_4 = rsi_val is not None and 45.0 <= rsi_val <= 68.0
+
+    # Condition 5: Normalized OBV change > 0.10 or 14d CLV average > 0.10
+    cond_4_5 = (
+        (obv_val is not None and obv_val > 0.10)
+        or (clv_14_avg is not None and clv_14_avg > 0.10)
+    )
+
+    # Condition 6: Not within 1.5% below confirmed swing high
+    # If required resistance metric is unavailable, do not assume clearance
+    cond_4_6 = False
+    if swing_high_confirmed and pct_from_swing_high is not None:
+        if not (-1.5 <= pct_from_swing_high <= 0.0):
+            cond_4_6 = True
+
+    if cond_4_1 and cond_4_2 and cond_4_3 and cond_4_4 and cond_4_5 and cond_4_6:
+        r4_reasons = [
+            "BUY_TREND_ALIGNMENT_CONFIRMED",
+            "BUY_HEALTHY_MOMENTUM_RSI",
+            "BUY_VOLUME_FLOW_SUPPORT",
+            "BUY_CLEAR_RESISTANCE_RUNWAY",
+        ]
+        if pct_from_50 is not None and pct_from_50 < 0.0:
+            r4_reasons.append("BUY_PULLBACK_SUPPORT_50_DMA")
+
+        r4_positive = [
+            f"Bullish trend structure: CMP ({cmp_val:.2f}) is above 200-DMA ({dma_200_val:.2f}) and 50-DMA ({dma_50_val:.2f}) is aligned above 200-DMA.",
+            f"Controlled entry zone: CMP is {pct_from_50:+.2f}% from the 50-DMA (within optimal band).",
+            f"Healthy momentum: RSI(14) is {rsi_val:.2f} (within constructive 45–68 band).",
+            f"Supportive price/volume-flow: normalized OBV change ({obv_val}) / CLV 14d average ({clv_14_avg}) indicates net accumulation.",
+            f"Resistance clearance: CMP ({cmp_val:.2f}) maintains runway below confirmed swing high ({swing_high_val:.2f}).",
+        ]
+
+        r4_cautionary = [
+            "BUY_CANDIDATE identifies a favorable technical pattern based on historical metrics; it does not guarantee profitable returns or eliminate risk of capital loss.",
+        ]
+
+        return ("BUY_CANDIDATE", r4_reasons, r4_positive, r4_cautionary, [])
+
+    # -----------------------------------------------------------------------
+    # Rule 5 — WAIT_AND_WATCH (Fallback)
+    # -----------------------------------------------------------------------
+    r5_reasons = []
+    r5_positive = []
+    r5_cautionary = []
+    r5_flags = []
+
+    if dma_200_val is not None and cmp_val > dma_200_val:
+        r5_positive.append(f"CMP ({cmp_val:.2f}) is above the 200-DMA ({dma_200_val:.2f}), preserving macro trend support.")
+    if dma_50_val is not None and cmp_val > dma_50_val:
+        r5_positive.append(f"CMP is above the 50-DMA ({dma_50_val:.2f}).")
+    if rsi_val is not None and 45.0 <= rsi_val <= 68.0:
+        r5_positive.append(f"RSI(14) of {rsi_val:.2f} is in constructive neutral range.")
+
+    if cond_4_1:
+        r5_reasons.append("WAIT_INCOMPLETE_BUY_CRITERIA")
+        if not cond_4_2:
+            r5_cautionary.append(f"Price is more than 2% below the 50-DMA or 50-DMA slope ({dma_slope_50}) is not rising.")
+        if not cond_4_3:
+            r5_cautionary.append(f"Price is {pct_from_50:.2f}% above the 50-DMA (exceeds 10% threshold).")
+        if not cond_4_4:
+            r5_cautionary.append(f"RSI(14) of {rsi_val} is outside the required 45–68 band.")
+        if not cond_4_5:
+            r5_cautionary.append("Price/volume-flow does not show positive accumulation (both OBV change and 14d CLV avg <= 0.10).")
+        if not cond_4_6:
+            if not swing_high_confirmed:
+                r5_cautionary.append("Confirmed resistance metric is unavailable; resistance clearance cannot be verified.")
+            else:
+                r5_cautionary.append(f"CMP is within 1.5% below confirmed swing high ({swing_high_val:.2f}), facing immediate resistance headwind.")
+    else:
+        r5_reasons.append("WAIT_CONSOLIDATION_OR_MIXED_SIGNALS")
+        r5_cautionary.append("Trend signals are mixed or consolidating; neither clear breakdown nor complete buy setup is present.")
+
+    return ("WAIT_AND_WATCH", r5_reasons, r5_positive, r5_cautionary, r5_flags)
 
 
 # ---------------------------------------------------------------------------

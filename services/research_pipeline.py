@@ -935,6 +935,368 @@ def build_research_result(
         market_as_of_date,
     )
 
+    # --------------------------------------------------------
+    # STAGE 1 ENHANCED TECHNICAL METRICS
+    # --------------------------------------------------------
+
+    technicals["history_bars"] = verified_or_unavailable(
+        technicals_raw.get("history_bars"),
+        "COUNT",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+    )
+
+    technicals["pct_from_50_dma"] = derived_datapoint(
+        technicals_raw.get("pct_from_50_dma"),
+        "PERCENT",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Distance of CMP from 50-day simple moving average.",
+    )
+
+    technicals["pct_from_200_dma"] = derived_datapoint(
+        technicals_raw.get("pct_from_200_dma"),
+        "PERCENT",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Distance of CMP from 200-day simple moving average.",
+    )
+
+    alignment_val = technicals_raw.get("dma_alignment")
+    if alignment_val and alignment_val != "UNAVAILABLE":
+        technicals["dma_alignment"] = datapoint(
+            value=alignment_val,
+            unit="TEXT",
+            status="DERIVED",
+            source="market_data",
+            retrieved_at=market_retrieved_at,
+            as_of_date=market_as_of_date,
+            notes="Relative alignment of 50 DMA vs 200 DMA.",
+        )
+    else:
+        technicals["dma_alignment"] = datapoint(
+            value=None,
+            unit="TEXT",
+            status="UNAVAILABLE",
+            source="market_data",
+            retrieved_at=market_retrieved_at,
+            as_of_date=market_as_of_date,
+            notes="Insufficient history (<200 bars) for 50/200 DMA alignment.",
+        )
+
+    slope50_val = technicals_raw.get("dma_slope_50")
+    if slope50_val and slope50_val != "UNAVAILABLE":
+        technicals["dma_slope_50"] = datapoint(
+            value=slope50_val,
+            unit="TEXT",
+            status="DERIVED",
+            source="market_data",
+            retrieved_at=market_retrieved_at,
+            as_of_date=market_as_of_date,
+            notes="10-session slope of 50 DMA (provisional ±0.50% flat tolerance).",
+        )
+    else:
+        technicals["dma_slope_50"] = datapoint(
+            value=None,
+            unit="TEXT",
+            status="UNAVAILABLE",
+            source="market_data",
+            retrieved_at=market_retrieved_at,
+            as_of_date=market_as_of_date,
+            notes="Insufficient history (<60 bars) for 50 DMA slope.",
+        )
+
+    technicals["dma_slope_50_pct"] = derived_datapoint(
+        technicals_raw.get("dma_slope_50_pct"),
+        "PERCENT",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "10-session percentage change of 50 DMA.",
+    )
+
+    slope200_val = technicals_raw.get("dma_slope_200")
+    if slope200_val and slope200_val != "UNAVAILABLE":
+        technicals["dma_slope_200"] = datapoint(
+            value=slope200_val,
+            unit="TEXT",
+            status="DERIVED",
+            source="market_data",
+            retrieved_at=market_retrieved_at,
+            as_of_date=market_as_of_date,
+            notes="10-session slope of 200 DMA (provisional ±0.50% flat tolerance).",
+        )
+    else:
+        technicals["dma_slope_200"] = datapoint(
+            value=None,
+            unit="TEXT",
+            status="UNAVAILABLE",
+            source="market_data",
+            retrieved_at=market_retrieved_at,
+            as_of_date=market_as_of_date,
+            notes="Insufficient history (<210 bars) for 200 DMA slope.",
+        )
+
+    technicals["dma_slope_200_pct"] = derived_datapoint(
+        technicals_raw.get("dma_slope_200_pct"),
+        "PERCENT",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "10-session percentage change of 200 DMA.",
+    )
+
+    crossover_type = technicals_raw.get("last_crossover_type")
+    crossover_notes = technicals_raw.get("crossover_notes")
+    if crossover_type in ("GOLDEN_CROSS", "DEATH_CROSS", "NOT_FOUND_IN_LOOKBACK"):
+        technicals["last_crossover_type"] = datapoint(
+            value=crossover_type,
+            unit="TEXT",
+            status="DERIVED",
+            source="market_data",
+            retrieved_at=market_retrieved_at,
+            as_of_date=market_as_of_date,
+            notes=crossover_notes or "Historical 50/200 DMA crossover status.",
+        )
+    else:
+        technicals["last_crossover_type"] = datapoint(
+            value=None,
+            unit="TEXT",
+            status="UNAVAILABLE",
+            source="market_data",
+            retrieved_at=market_retrieved_at,
+            as_of_date=market_as_of_date,
+            notes=crossover_notes or "Insufficient history (<200 bars) for crossover detection.",
+        )
+
+    technicals["last_crossover_date"] = derived_datapoint(
+        technicals_raw.get("last_crossover_date"),
+        "DATE",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Date of most recent 50/200 DMA crossover.",
+    )
+
+    technicals["days_since_dma_crossover"] = derived_datapoint(
+        technicals_raw.get("days_since_dma_crossover"),
+        "COUNT",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Trading sessions elapsed since most recent 50/200 DMA crossover.",
+    )
+
+    technicals["atr_14"] = derived_datapoint(
+        technicals_raw.get("atr_14"),
+        "INR",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Wilder's 14-session Average True Range.",
+    )
+
+    technicals["atr_pct"] = derived_datapoint(
+        technicals_raw.get("atr_pct"),
+        "PERCENT",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "ATR(14) as percentage of Current Market Price.",
+    )
+
+    technicals["atr_50_avg"] = derived_datapoint(
+        technicals_raw.get("atr_50_avg"),
+        "INR",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "50-session simple moving average baseline of ATR(14).",
+    )
+
+    technicals["avg_volume_5"] = derived_datapoint(
+        technicals_raw.get("avg_volume_5"),
+        "SHARES",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "5-session simple moving average of volume.",
+    )
+
+    technicals["avg_volume_20"] = derived_datapoint(
+        technicals_raw.get("avg_volume_20"),
+        "SHARES",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "20-session simple moving average of volume.",
+    )
+
+    technicals["avg_volume_50"] = derived_datapoint(
+        technicals_raw.get("avg_volume_50"),
+        "SHARES",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "50-session simple moving average of volume.",
+    )
+
+    technicals["volume_vs_20d_pct"] = derived_datapoint(
+        technicals_raw.get("volume_vs_20d_pct"),
+        "PERCENT",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Current volume relative to 20-session volume average.",
+    )
+
+    technicals["obv_change_norm_14d"] = derived_datapoint(
+        technicals_raw.get("obv_change_norm_14d"),
+        "RATIO",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Normalized 14-session OBV change relative to 20-day volume baseline; provisional ±0.20 threshold.",
+    )
+
+    technicals["clv"] = derived_datapoint(
+        technicals_raw.get("clv"),
+        "RATIO",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Close Location Value for latest session (guarded 0.0 on zero-range candles).",
+    )
+
+    technicals["clv_14_avg"] = derived_datapoint(
+        technicals_raw.get("clv_14_avg"),
+        "RATIO",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "14-session simple moving average of Close Location Value.",
+    )
+
+    technicals["pct_from_52w_high"] = derived_datapoint(
+        technicals_raw.get("pct_from_52w_high"),
+        "PERCENT",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Distance of CMP from 52-week High (raw daily High over 252 sessions).",
+    )
+
+    technicals["pct_from_52w_low"] = derived_datapoint(
+        technicals_raw.get("pct_from_52w_low"),
+        "PERCENT",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Distance of CMP from 52-week Low (raw daily Low over 252 sessions).",
+    )
+
+    technicals["swing_high_20"] = derived_datapoint(
+        technicals_raw.get("swing_high_20"),
+        "INR",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Confirmed 20-session swing high price level (3-session confirmation lag).",
+    )
+
+    technicals["swing_high_date"] = derived_datapoint(
+        technicals_raw.get("swing_high_date"),
+        "DATE",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Date of confirmed 20-session swing high peak.",
+    )
+
+    technicals["swing_high_confirmation_date"] = derived_datapoint(
+        technicals_raw.get("swing_high_confirmation_date"),
+        "DATE",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Confirmation date of 20-session swing high (3-session lag prevents look-ahead).",
+    )
+
+    technicals["pct_from_swing_high"] = derived_datapoint(
+        technicals_raw.get("pct_from_swing_high"),
+        "PERCENT",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Distance of CMP from confirmed 20-session swing high.",
+    )
+
+    technicals["swing_low_20"] = derived_datapoint(
+        technicals_raw.get("swing_low_20"),
+        "INR",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Confirmed 20-session swing low price level (3-session confirmation lag).",
+    )
+
+    technicals["swing_low_date"] = derived_datapoint(
+        technicals_raw.get("swing_low_date"),
+        "DATE",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Date of confirmed 20-session swing low trough.",
+    )
+
+    technicals["swing_low_confirmation_date"] = derived_datapoint(
+        technicals_raw.get("swing_low_confirmation_date"),
+        "DATE",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Confirmation date of 20-session swing low (3-session lag prevents look-ahead).",
+    )
+
+    technicals["pct_from_swing_low"] = derived_datapoint(
+        technicals_raw.get("pct_from_swing_low"),
+        "PERCENT",
+        "market_data",
+        None,
+        market_retrieved_at,
+        market_as_of_date,
+        "Distance of CMP from confirmed 20-session swing low.",
+    )
+
     # Add block provenance.
     technicals = {
         "provenance": block_provenance(
