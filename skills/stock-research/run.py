@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""
+OpenClaw Stock Research Skill Execution Runner
+
+Purpose
+-------
+Integrates the complete Phase 4 stock research workflow for OpenClaw agents:
+1. Symbol validation and normalization.
+2. 6-hour Supabase cache check with engine compatibility checks.
+3. Force-refresh bypass capability.
+4. Render REST API research client query (with bounded timeouts and schema validation).
+5. Higher-level deterministic investment assessment derivation.
+6. Append-only Supabase persistence for audit snapshots and recommendations.
+7. Concise 8-section Markdown chat response output.
+
+Usage:
+    python -m skills.stock-research.run SYMBOL [--force-refresh] [--allow-local-fallback] [--json]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any, Dict
+
+# Ensure project root is in sys.path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from intelligence.explainer import explain_assessment
+from intelligence.investment_assessment import evaluate_investment_assessment
+from interfaces.research_cli import normalize_symbol
+from services.research_client import ResearchClient, RenderAPIError
+from services.supabase_repo import SupabaseRepository
+
+
+def execute_stock_research(
+    raw_symbol: str,
+    force_refresh: bool = False,
+    allow_local_fallback: bool = False,
+    use_gemini: bool = True,
+) -> Dict[str, Any]:
+    """
+    Execute full Phase 4 stock research and investment assessment workflow.
+
+    Returns
+    -------
+    Dictionary containing recommendation, snapshot, markdown response, and persistence status.
+    """
+    symbol = normalize_symbol(raw_symbol)
+    repo = SupabaseRepository()
+    client = ResearchClient()
+
+    # 1. Cache Check
+    cached_rec, cached_snap = repo.get_cached_assessment(
+        symbol=symbol,
+        force_refresh=force_refresh,
+    )
+
+    if cached_rec is not None and cached_snap is not None:
+        explanation = explain_assessment(cached_rec, use_gemini=use_gemini)
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "is_cached": True,
+            "recommendation": cached_rec,
+            "snapshot": cached_snap,
+            "markdown_response": explanation,
+            "persistence_status": {
+                "saved": True,
+                "id": cached_rec.get("id"),
+                "is_cached": True,
+            },
+        }
+
+    # 2. Fresh Fetch via Render API
+    research_result = client.fetch_research(
+        raw_symbol=symbol,
+        allow_local_fallback=allow_local_fallback,
+    )
+
+    # 3. Deterministic Investment Assessment
+    recommendation = evaluate_investment_assessment(research_result)
+
+    # 4. Append-Only Persistence to Supabase
+    persistence_status: Dict[str, Any] = {
+        "saved": False,
+        "id": None,
+        "warning": None,
+    }
+
+    if repo.is_configured:
+        snap_save_result = repo.save_research_snapshot(research_result)
+        if snap_save_result.get("saved") and snap_save_result.get("id"):
+            snapshot_id = snap_save_result["id"]
+            rec_save_result = repo.save_recommendation(recommendation, snapshot_id)
+            if rec_save_result.get("saved"):
+                recommendation["id"] = rec_save_result.get("id")
+                persistence_status = {
+                    "saved": True,
+                    "id": rec_save_result.get("id"),
+                    "snapshot_id": snapshot_id,
+                    "is_duplicate": rec_save_result.get("is_duplicate", False),
+                }
+            else:
+                persistence_status = {
+                    "saved": False,
+                    "warning": rec_save_result.get("warning") or "Recommendation persistence failed.",
+                }
+        else:
+            persistence_status = {
+                "saved": False,
+                "warning": snap_save_result.get("warning") or "Snapshot persistence failed.",
+            }
+    else:
+        persistence_status = {
+            "saved": False,
+            "warning": "Supabase persistence skipped: SUPABASE_URL or SUPABASE_KEY not configured.",
+        }
+
+    # 5. Format Chat Response
+    explanation = explain_assessment(recommendation, use_gemini=use_gemini)
+    if persistence_status.get("warning"):
+        explanation += f"\n\n> ⚠️ *Audit Persistence Notice: {persistence_status['warning']}*"
+
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "is_cached": False,
+        "recommendation": recommendation,
+        "snapshot": research_result,
+        "markdown_response": explanation,
+        "persistence_status": persistence_status,
+    }
+
+
+def main() -> int:
+    """CLI interface for OpenClaw skill execution."""
+    parser = argparse.ArgumentParser(
+        description="Execute deterministic stock research and investment assessment."
+    )
+    parser.add_argument("symbol", help="Stock ticker symbol (e.g. TCS, INFY)")
+    parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Bypass the 6-hour cache and fetch fresh research from Render API.",
+    )
+    parser.add_argument(
+        "--allow-local-fallback",
+        action="store_true",
+        help="Allow local execution fallback if Render API fails.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output raw JSON instead of formatted markdown.",
+    )
+    parser.add_argument(
+        "--no-gemini",
+        action="store_true",
+        help="Disable Gemini formatting and use deterministic template exclusively.",
+    )
+
+    args = parser.parse_args()
+
+    try:
+        result = execute_stock_research(
+            raw_symbol=args.symbol,
+            force_refresh=args.force_refresh,
+            allow_local_fallback=args.allow_local_fallback,
+            use_gemini=not args.no_gemini,
+        )
+
+        if args.json:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            print(result["markdown_response"])
+
+        return 0
+
+    except Exception as exc:
+        err_payload = {
+            "ok": False,
+            "error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+            },
+        }
+        if args.json:
+            print(json.dumps(err_payload, indent=2, ensure_ascii=False))
+        else:
+            print(f"❌ Stock Research Execution Failed: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
