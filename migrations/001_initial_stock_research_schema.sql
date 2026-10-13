@@ -6,6 +6,23 @@
 -- 1. Append-only audit history for research snapshots and recommendations.
 -- 2. Foreign keys use ON DELETE RESTRICT to protect audit history (NO CASCADE).
 -- 3. Idempotent unique indexes to prevent duplicate records during retries.
+-- 4. Native DEFAULT now() for timezone-safe UTC timestamps.
+-- 5. Row Level Security (RLS) enabled for least-privilege private access.
+-- 6. Database triggers enforcing append-only immutability (prohibiting UPDATE/DELETE).
+-- ==============================================================================
+-- Migration Rerun Behavior & Prerequisites:
+-- - Existing tables: This migration assumes target tables do not already exist,
+--   or that existing tables have definitions compatible with this migration.
+--   CREATE TABLE IF NOT EXISTS does not modify or reconcile an existing table's
+--   columns or data types.
+-- - Indexes: CREATE INDEX IF NOT EXISTS avoids recreating an index with the same
+--   name, but does not verify that its definition matches the intended index.
+--   Existing indexes must be checked for structural compatibility.
+-- - Triggers: The migration uses DROP TRIGGER IF EXISTS followed by CREATE TRIGGER,
+--   so named triggers are safely recreated when the migration is rerun.
+-- - Conflicting environments: Existing incompatible tables or database objects
+--   require a separately reviewed ALTER migration or an explicit, approved
+--   remediation plan. Do not automatically drop tables or data.
 -- ==============================================================================
 
 -- 1. Table: research_snapshots
@@ -23,7 +40,7 @@ CREATE TABLE IF NOT EXISTS research_snapshots (
     data_quality_summary JSONB NOT NULL,
     research_data JSONB NOT NULL,
     provenance JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Fast lookup by symbol and creation date for cache checks
@@ -61,7 +78,7 @@ CREATE TABLE IF NOT EXISTS investment_recommendations (
     is_cached BOOLEAN NOT NULL DEFAULT FALSE,
     cache_metadata JSONB DEFAULT '{}'::jsonb,
     summary_explanation TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Fast lookup by symbol and creation date for recommendation cache checks
@@ -74,3 +91,43 @@ CREATE INDEX IF NOT EXISTS idx_recommendations_action
 -- Idempotency: Prevent duplicate recommendation for the exact same research run and engine version
 CREATE UNIQUE INDEX IF NOT EXISTS uq_recommendations_run_engine
     ON investment_recommendations (research_run_id, engine_version);
+
+
+-- ==============================================================================
+-- 3. Security & Access Control (Row Level Security)
+-- ==============================================================================
+-- Enable RLS on both audit tables.
+-- When accessed via backend service_role key, RLS is bypassed.
+-- When accessed via public/anon key, access is completely blocked by default.
+ALTER TABLE research_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE investment_recommendations ENABLE ROW LEVEL SECURITY;
+
+-- Explicitly revoke mutation privileges from public/anon and authenticated roles
+REVOKE UPDATE, DELETE ON research_snapshots FROM anon, authenticated;
+REVOKE UPDATE, DELETE ON investment_recommendations FROM anon, authenticated;
+
+
+-- ==============================================================================
+-- 4. Audit Immutability Enforcement (Append-Only Triggers)
+-- ==============================================================================
+-- Enforces append-only immutability against standard application and user queries.
+-- Note: Superusers or database owners retain administrative capability to alter
+-- or disable triggers if needed for authorized maintenance operations.
+CREATE OR REPLACE FUNCTION prevent_audit_mutation()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'Audit records are append-only. Mutation (UPDATE) or deletion (DELETE) is prohibited on table "%"', TG_TABLE_NAME;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_immutable_research_snapshots ON research_snapshots;
+CREATE TRIGGER trg_immutable_research_snapshots
+    BEFORE UPDATE OR DELETE ON research_snapshots
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_audit_mutation();
+
+DROP TRIGGER IF EXISTS trg_immutable_investment_recommendations ON investment_recommendations;
+CREATE TRIGGER trg_immutable_investment_recommendations
+    BEFORE UPDATE OR DELETE ON investment_recommendations
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_audit_mutation();
