@@ -57,11 +57,13 @@ class ResearchClient:
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         max_retries: int = DEFAULT_MAX_RETRIES,
         schema_path: Optional[Path] = None,
+        api_key: Optional[str] = None,
     ):
         raw_url = base_url or os.environ.get("RENDER_RESEARCH_API_URL", DEFAULT_RENDER_API_BASE)
         self.base_url = raw_url.rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
+        self.api_key = api_key or os.environ.get("RESEARCH_API_KEY")
         self.schema_path = schema_path or (PROJECT_ROOT / "schemas" / "research-result.v1.schema.json")
         self._validator = None
         self._init_schema_validator()
@@ -91,6 +93,12 @@ class ResearchClient:
         allow_local_fallback: If True, falls back to local pipeline only after
                               Render API fails, explicitly marking the provenance.
         """
+        if not self.api_key:
+            raise RenderAPIError(
+                "Authentication configuration error: RESEARCH_API_KEY environment variable is missing. "
+                "ResearchClient cannot make authenticated requests to Render API."
+            )
+
         symbol = normalize_symbol(raw_symbol)
         endpoint = f"{self.base_url}/research/{symbol}"
 
@@ -100,10 +108,14 @@ class ResearchClient:
         while attempts <= self.max_retries:
             attempts += 1
             try:
+                headers = {
+                    "Accept": "application/json",
+                    "X-API-Key": self.api_key,
+                }
                 resp = requests.get(
                     endpoint,
                     timeout=self.timeout,
-                    headers={"Accept": "application/json"},
+                    headers=headers,
                 )
 
                 # Check if retryable transient server error

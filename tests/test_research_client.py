@@ -52,6 +52,7 @@ class TestResearchClient(unittest.TestCase):
             base_url="https://mock-render-service.onrender.com",
             timeout=10.0,
             max_retries=1,
+            api_key="test-mock-key-12345",
         )
 
     @patch("services.research_client.requests.get")
