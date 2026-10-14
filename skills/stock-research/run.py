@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 # Ensure project root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -34,7 +35,45 @@ from intelligence.explainer import explain_assessment
 from intelligence.investment_assessment import evaluate_investment_assessment
 from interfaces.research_cli import normalize_symbol
 from services.research_client import ResearchClient, RenderAPIError
+from services.research_pipeline import run_pipeline
 from services.supabase_repo import SupabaseRepository
+
+VALID_ENVIRONMENTS = {"dev", "prod"}
+DEFAULT_ENVIRONMENT = "prod"
+
+
+def resolve_execution_env(cli_env: Optional[str] = None) -> str:
+    """
+    Resolve execution environment with strict precedence:
+    1. Explicit CLI argument (--env)
+    2. Environment variable (STOCK_RESEARCH_ENV)
+    3. Default ('prod')
+
+    Rejects invalid values case-insensitively with a clean ValueError.
+    """
+    if cli_env is not None:
+        raw_val = str(cli_env).strip()
+        norm_val = raw_val.lower()
+        if norm_val in VALID_ENVIRONMENTS:
+            return norm_val
+        raise ValueError(f"Invalid environment '{cli_env}'. Must be 'dev' or 'prod'.")
+
+    env_var = os.environ.get("STOCK_RESEARCH_ENV")
+    if env_var is not None:
+        raw_val = env_var.strip()
+        norm_val = raw_val.lower()
+        if norm_val in VALID_ENVIRONMENTS:
+            return norm_val
+        raise ValueError(
+            f"Invalid environment '{env_var}' in STOCK_RESEARCH_ENV. Must be 'dev' or 'prod'."
+        )
+
+    return DEFAULT_ENVIRONMENT
+
+
+def _execute_local_pipeline(symbol: str) -> Dict[str, Any]:
+    """Execute local research pipeline in DEV mode."""
+    return run_pipeline(symbol=symbol)
 
 
 def execute_stock_research(
@@ -42,15 +81,65 @@ def execute_stock_research(
     force_refresh: bool = False,
     allow_local_fallback: bool = False,
     use_gemini: bool = True,
+    env: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute full Phase 4 stock research and investment assessment workflow.
+
+    Parameters
+    ----------
+    raw_symbol : str
+        Stock ticker symbol.
+    force_refresh : bool
+        If True, bypasses 6-hour Supabase cache.
+    allow_local_fallback : bool
+        Whether to allow local fallback if Render API fails (strictly False in PROD mode).
+    use_gemini : bool
+        Whether to format chat response using Gemini.
+    env : Optional[str]
+        Execution environment ('dev' or 'prod'). Precedence: CLI/param -> STOCK_RESEARCH_ENV -> prod.
 
     Returns
     -------
     Dictionary containing recommendation, snapshot, markdown response, and persistence status.
     """
+    # Preserve backward compatibility if a string was passed as force_refresh positionally
+    if isinstance(force_refresh, str) and env is None:
+        env = force_refresh
+        force_refresh = False
+
     symbol = normalize_symbol(raw_symbol)
+    resolved_env = resolve_execution_env(env)
+
+    # ----------------------------------------------------
+    # DEV Mode: Local pipeline execution, bypass Supabase
+    # ----------------------------------------------------
+    if resolved_env == "dev":
+        research_result = _execute_local_pipeline(symbol)
+        recommendation = evaluate_investment_assessment(research_result)
+        persistence_status = {
+            "saved": False,
+            "warning": "Supabase persistence skipped in DEV mode",
+        }
+        explanation = explain_assessment(recommendation, use_gemini=use_gemini)
+        if persistence_status.get("warning"):
+            explanation += f"\n\n> ⚠️ *Audit Persistence Notice: {persistence_status['warning']}*"
+
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "is_cached": False,
+            "execution_env": "dev",
+            "data_source": "local_pipeline",
+            "recommendation": recommendation,
+            "snapshot": research_result,
+            "markdown_response": explanation,
+            "persistence_status": persistence_status,
+        }
+
+    # ----------------------------------------------------
+    # PROD Mode: Render REST API with Supabase persistence
+    # ----------------------------------------------------
     repo = SupabaseRepository()
     client = ResearchClient()
 
@@ -66,6 +155,8 @@ def execute_stock_research(
             "ok": True,
             "symbol": symbol,
             "is_cached": True,
+            "execution_env": "prod",
+            "data_source": "render_api",
             "recommendation": cached_rec,
             "snapshot": cached_snap,
             "markdown_response": explanation,
@@ -76,10 +167,10 @@ def execute_stock_research(
             },
         }
 
-    # 2. Fresh Fetch via Render API
+    # 2. Fresh Fetch via Render API (PROD mode never allows local fallback)
     research_result = client.fetch_research(
         raw_symbol=symbol,
-        allow_local_fallback=allow_local_fallback,
+        allow_local_fallback=False,
     )
 
     # 3. Deterministic Investment Assessment
@@ -109,11 +200,13 @@ def execute_stock_research(
                 persistence_status = {
                     "saved": False,
                     "warning": rec_save_result.get("warning") or "Recommendation persistence failed.",
+                    "error": rec_save_result.get("error"),
                 }
         else:
             persistence_status = {
                 "saved": False,
                 "warning": snap_save_result.get("warning") or "Snapshot persistence failed.",
+                "error": snap_save_result.get("error"),
             }
     else:
         persistence_status = {
@@ -130,6 +223,8 @@ def execute_stock_research(
         "ok": True,
         "symbol": symbol,
         "is_cached": False,
+        "execution_env": "prod",
+        "data_source": "render_api",
         "recommendation": recommendation,
         "snapshot": research_result,
         "markdown_response": explanation,
@@ -137,12 +232,19 @@ def execute_stock_research(
     }
 
 
-def main() -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     """CLI interface for OpenClaw skill execution."""
     parser = argparse.ArgumentParser(
         description="Execute deterministic stock research and investment assessment."
     )
     parser.add_argument("symbol", help="Stock ticker symbol (e.g. TCS, INFY)")
+    parser.add_argument(
+        "--env",
+        dest="env",
+        default=None,
+        metavar="{dev,prod}",
+        help="Execution environment ('dev' or 'prod'). Precedence: CLI --env -> STOCK_RESEARCH_ENV -> prod.",
+    )
     parser.add_argument(
         "--force-refresh",
         action="store_true",
@@ -151,7 +253,7 @@ def main() -> int:
     parser.add_argument(
         "--allow-local-fallback",
         action="store_true",
-        help="Allow local execution fallback if Render API fails.",
+        help="Allow local execution fallback if Render API fails (disabled in PROD mode).",
     )
     parser.add_argument(
         "--json",
@@ -164,7 +266,7 @@ def main() -> int:
         help="Disable Gemini formatting and use deterministic template exclusively.",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     try:
         result = execute_stock_research(
@@ -172,6 +274,7 @@ def main() -> int:
             force_refresh=args.force_refresh,
             allow_local_fallback=args.allow_local_fallback,
             use_gemini=not args.no_gemini,
+            env=args.env,
         )
 
         if args.json:
