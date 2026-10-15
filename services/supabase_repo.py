@@ -161,6 +161,86 @@ class SupabaseRepository:
             return None, None
 
     # ==========================================================================
+    # HISTORICAL BASELINE LOOKUP
+    # ==========================================================================
+
+    def get_baseline_assessment(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch the earliest historical investment recommendation baseline for a symbol.
+
+        Requirements:
+        1. Selects the earliest record for the symbol (order=created_at.asc).
+        2. Requires a reliable timestamp (created_at or assessment_timestamp).
+        3. Identifies the earliest valid positive CMP. If the very first record has a
+           missing or non-positive CMP, inspects subsequent historical records to find
+           the earliest valid positive CMP to serve as the price baseline, while
+           preserving the true first research timestamp.
+        4. Gracefully handles Supabase HTTP non-200 errors, network failures, timeouts,
+           empty responses, and malformed records without raising exceptions.
+        5. Does not mutate or delete any historical record.
+        """
+        if not self.is_configured:
+            return None
+
+        norm_symbol = str(symbol).strip().upper()
+        if not norm_symbol:
+            return None
+
+        endpoint = f"{self.url}/rest/v1/investment_recommendations"
+        params = {
+            "symbol": f"eq.{norm_symbol}",
+            "order": "created_at.asc",
+            "limit": "10",
+        }
+
+        try:
+            resp = requests.get(
+                endpoint,
+                headers=self._headers(),
+                params=params,
+                timeout=self.timeout,
+            )
+            if resp.status_code != 200:
+                return None
+
+            records = resp.json()
+            if not isinstance(records, list) or not records:
+                return None
+
+            first_rec = records[0]
+            if not isinstance(first_rec, dict):
+                return None
+
+            # Must have a reliable timestamp
+            reliable_ts = first_rec.get("created_at") or first_rec.get("assessment_timestamp")
+            if not reliable_ts:
+                return None
+
+            baseline_result = dict(first_rec)
+
+            # Check if first_rec has a valid positive CMP
+            cmp_val = first_rec.get("cmp")
+            has_valid_positive_cmp = isinstance(cmp_val, (int, float)) and cmp_val > 0
+
+            # If first record's CMP is missing/non-positive, search subsequent records for earliest valid positive CMP
+            if not has_valid_positive_cmp and len(records) > 1:
+                for candidate in records[1:]:
+                    if isinstance(candidate, dict):
+                        cand_cmp = candidate.get("cmp")
+                        if isinstance(cand_cmp, (int, float)) and cand_cmp > 0:
+                            baseline_result["cmp"] = cand_cmp
+                            baseline_result["cmp_source_timestamp"] = (
+                                candidate.get("created_at") or candidate.get("assessment_timestamp")
+                            )
+                            break
+
+            return baseline_result
+
+        except Exception:
+            # Network failures, timeouts, or parsing errors degrade gracefully without crashing research
+            return None
+
+    # ==========================================================================
     # APPEND-ONLY PERSISTENCE
     # ==========================================================================
 

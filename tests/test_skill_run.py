@@ -440,6 +440,164 @@ class TestSkillRun(unittest.TestCase):
         self.assertEqual(output["error"]["type"], "ValueError")
         self.assertIn("Must be 'dev' or 'prod'", output["error"]["message"])
 
+    @patch.object(_skill_run_mod, "ResearchClient")
+    @patch.object(_skill_run_mod, "SupabaseRepository")
+    def test_track_record_first_time_research_establishes_baseline(self, mock_repo_cls, mock_client_cls):
+        """First-time research establishes baseline before persisting to prevent self-comparison."""
+        call_order = []
+        mock_repo = MagicMock()
+        mock_repo.is_configured = True
+        mock_repo.get_cached_assessment.return_value = (None, None)
+
+        def mock_get_baseline(symbol):
+            call_order.append("get_baseline")
+            return None
+
+        def mock_save_snapshot(snapshot):
+            call_order.append("save_snapshot")
+            return {"saved": True, "id": "snap-1"}
+
+        def mock_save_rec(rec, snap_id):
+            call_order.append("save_rec")
+            return {"saved": True, "id": "rec-1"}
+
+        mock_repo.get_baseline_assessment.side_effect = mock_get_baseline
+        mock_repo.save_research_snapshot.side_effect = mock_save_snapshot
+        mock_repo.save_recommendation.side_effect = mock_save_rec
+        mock_repo_cls.return_value = mock_repo
+
+        mock_client = MagicMock()
+        mock_client.fetch_research.return_value = _mock_research_result("TCS")
+        mock_client_cls.return_value = mock_client
+
+        result = execute_stock_research("TCS")
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["is_cached"])
+        # Baseline must be queried BEFORE saving new records to prevent self-comparison
+        self.assertEqual(call_order, ["get_baseline", "save_snapshot", "save_rec"])
+
+        tr = result["track_record"]
+        self.assertEqual(tr["status"], "BASELINE_ESTABLISHED")
+        self.assertFalse(tr["has_prior_history"])
+        self.assertIn("Initial research baseline established", tr["note"])
+        self.assertIn("Initial baseline established", result["markdown_response"])
+
+    @patch.object(_skill_run_mod, "ResearchClient")
+    @patch.object(_skill_run_mod, "SupabaseRepository")
+    def test_track_record_subsequent_research_computes_return_against_baseline(self, mock_repo_cls, mock_client_cls):
+        """Subsequent research computes price return and elapsed time against prior baseline."""
+        mock_repo = MagicMock()
+        mock_repo.is_configured = True
+        mock_repo.get_cached_assessment.return_value = (None, None)
+        mock_repo.get_baseline_assessment.return_value = {
+            "id": "rec-base-1",
+            "symbol": "TCS",
+            "cmp": 3000.0,
+            "investment_action": "BUY_CANDIDATE",
+            "created_at": "2026-01-01T10:00:00Z",
+        }
+        mock_repo.save_research_snapshot.return_value = {"saved": True, "id": "snap-2"}
+        mock_repo.save_recommendation.return_value = {"saved": True, "id": "rec-2"}
+        mock_repo_cls.return_value = mock_repo
+
+        mock_client = MagicMock()
+        # Mock research CMP is 3500.0
+        mock_client.fetch_research.return_value = _mock_research_result("TCS")
+        mock_client_cls.return_value = mock_client
+
+        result = execute_stock_research("TCS")
+
+        self.assertTrue(result["ok"])
+        tr = result["track_record"]
+        self.assertEqual(tr["status"], "TRACK_RECORD_AVAILABLE")
+        self.assertTrue(tr["has_prior_history"])
+        self.assertEqual(tr["first_researched_price"], 3000.0)
+        self.assertEqual(tr["latest_price"], 3500.0)
+        self.assertEqual(tr["price_change"], 500.0)
+        self.assertAlmostEqual(tr["price_return_pct"], 16.67, places=2)
+        self.assertIn("First researched", result["markdown_response"])
+        self.assertIn("Price Return (Research Baseline):", result["markdown_response"])
+        self.assertIn("+16.67%", result["markdown_response"])
+
+    @patch.object(_skill_run_mod, "SupabaseRepository")
+    def test_track_record_cache_hit_preserves_history_with_zero_duplicate_inserts(self, mock_repo_cls):
+        """Cache hit attaches track record from baseline without creating duplicate DB records."""
+        mock_repo = MagicMock()
+        mock_repo.is_configured = True
+        mock_rec = {
+            "id": "rec-cached-1",
+            "symbol": "TCS",
+            "company_name": "Tata Consultancy Services Ltd",
+            "cmp": 3600.0,
+            "technical_classification": "BUY_CANDIDATE",
+            "investment_action": "BUY_CANDIDATE",
+            "created_at": "2026-10-15T08:00:00Z",
+        }
+        mock_snap = _mock_research_result("TCS")
+        mock_repo.get_cached_assessment.return_value = (mock_rec, mock_snap)
+        mock_repo.get_baseline_assessment.return_value = {
+            "id": "rec-base-1",
+            "symbol": "TCS",
+            "cmp": 3000.0,
+            "investment_action": "BUY_CANDIDATE",
+            "created_at": "2026-01-01T10:00:00Z",
+        }
+        mock_repo_cls.return_value = mock_repo
+
+        result = execute_stock_research("TCS")
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["is_cached"])
+        tr = result["track_record"]
+        self.assertEqual(tr["status"], "TRACK_RECORD_AVAILABLE")
+        self.assertEqual(tr["first_researched_price"], 3000.0)
+        self.assertEqual(tr["latest_price"], 3600.0)
+        self.assertEqual(tr["price_change"], 600.0)
+        self.assertAlmostEqual(tr["price_return_pct"], 20.0, places=2)
+
+        # Zero calls to save new records on cache hit
+        mock_repo.save_research_snapshot.assert_not_called()
+        mock_repo.save_recommendation.assert_not_called()
+
+    @patch.object(_skill_run_mod, "ResearchClient")
+    @patch.object(_skill_run_mod, "SupabaseRepository")
+    def test_track_record_database_failure_resilience(self, mock_repo_cls, mock_client_cls):
+        """When baseline query fails, research execution succeeds with history-unavailable status."""
+        mock_repo = MagicMock()
+        mock_repo.is_configured = True
+        mock_repo.get_cached_assessment.return_value = (None, None)
+        mock_repo.get_baseline_assessment.side_effect = RuntimeError("Database timeout 504")
+        mock_repo.save_research_snapshot.return_value = {"saved": True, "id": "snap-1"}
+        mock_repo.save_recommendation.return_value = {"saved": True, "id": "rec-1"}
+        mock_repo_cls.return_value = mock_repo
+
+        mock_client = MagicMock()
+        mock_client.fetch_research.return_value = _mock_research_result("TCS")
+        mock_client_cls.return_value = mock_client
+
+        result = execute_stock_research("TCS")
+
+        self.assertTrue(result["ok"])
+        tr = result["track_record"]
+        self.assertEqual(tr["status"], "UNAVAILABLE")
+        self.assertIn("temporarily unavailable", tr["note"])
+        self.assertIn("Historical track record temporarily unavailable due to database lookup error", result["markdown_response"])
+
+    def test_track_record_dev_mode_indicates_bypass(self):
+        """DEV mode bypasses Supabase and explicitly flags track record as UNAVAILABLE."""
+        mock_pipeline_result = _mock_research_result("TCS")
+
+        with patch.object(_skill_run_mod, "run_pipeline", return_value=mock_pipeline_result):
+            result = execute_stock_research("TCS", env="dev")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["execution_env"], "dev")
+        tr = result["track_record"]
+        self.assertEqual(tr["status"], "UNAVAILABLE")
+        self.assertIn("disabled in local DEV mode", tr["note"])
+        self.assertIn("Track record disabled in local DEV mode", result["markdown_response"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

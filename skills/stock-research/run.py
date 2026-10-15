@@ -33,6 +33,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from intelligence.explainer import explain_assessment
 from intelligence.investment_assessment import evaluate_investment_assessment
+from intelligence.track_record import calculate_track_record
 from interfaces.research_cli import normalize_symbol
 from services.research_client import ResearchClient, RenderAPIError
 from services.research_pipeline import run_pipeline
@@ -121,7 +122,12 @@ def execute_stock_research(
             "saved": False,
             "warning": "Supabase persistence skipped in DEV mode",
         }
-        explanation = explain_assessment(recommendation, use_gemini=use_gemini)
+        track_record = {
+            "status": "UNAVAILABLE",
+            "note": "Track record disabled in local DEV mode (Supabase bypassed).",
+        }
+        recommendation["track_record"] = track_record
+        explanation = explain_assessment(recommendation, track_record=track_record, use_gemini=use_gemini)
         if persistence_status.get("warning"):
             explanation += f"\n\n> ⚠️ *Audit Persistence Notice: {persistence_status['warning']}*"
 
@@ -133,6 +139,7 @@ def execute_stock_research(
             "data_source": "local_pipeline",
             "recommendation": recommendation,
             "snapshot": research_result,
+            "track_record": track_record,
             "markdown_response": explanation,
             "persistence_status": persistence_status,
         }
@@ -150,7 +157,29 @@ def execute_stock_research(
     )
 
     if cached_rec is not None and cached_snap is not None:
-        explanation = explain_assessment(cached_rec, use_gemini=use_gemini)
+        # Retrieve historical baseline for cached assessment without creating duplicates
+        baseline_rec = None
+        if repo.is_configured:
+            try:
+                base_cand = repo.get_baseline_assessment(symbol)
+                if isinstance(base_cand, dict):
+                    baseline_rec = base_cand
+            except Exception:
+                baseline_rec = None
+
+        if baseline_rec is not None:
+            track_record = calculate_track_record(cached_rec, baseline_rec)
+        elif not repo.is_configured:
+            track_record = {
+                "status": "UNAVAILABLE",
+                "note": "Supabase not configured; historical track record unavailable.",
+            }
+        else:
+            # Baseline query returned None (no database records) -> establishes baseline
+            track_record = calculate_track_record(cached_rec, None)
+
+        cached_rec["track_record"] = track_record
+        explanation = explain_assessment(cached_rec, track_record=track_record, use_gemini=use_gemini)
         return {
             "ok": True,
             "symbol": symbol,
@@ -159,6 +188,7 @@ def execute_stock_research(
             "data_source": "render_api",
             "recommendation": cached_rec,
             "snapshot": cached_snap,
+            "track_record": track_record,
             "markdown_response": explanation,
             "persistence_status": {
                 "saved": True,
@@ -176,7 +206,36 @@ def execute_stock_research(
     # 3. Deterministic Investment Assessment
     recommendation = evaluate_investment_assessment(research_result)
 
-    # 4. Append-Only Persistence to Supabase
+    # 4. Retrieve Baseline BEFORE saving new record (prevents self-comparison)
+    baseline_rec = None
+    baseline_lookup_failed = False
+    if repo.is_configured:
+        try:
+            base_cand = repo.get_baseline_assessment(symbol)
+            if isinstance(base_cand, dict):
+                baseline_rec = base_cand
+        except Exception:
+            baseline_lookup_failed = True
+
+    if baseline_rec is not None:
+        track_record = calculate_track_record(recommendation, baseline_rec)
+    elif baseline_lookup_failed:
+        track_record = {
+            "status": "UNAVAILABLE",
+            "note": "Historical track record temporarily unavailable due to database lookup error.",
+        }
+    elif not repo.is_configured:
+        track_record = {
+            "status": "UNAVAILABLE",
+            "note": "Supabase not configured; historical track record unavailable.",
+        }
+    else:
+        # First-time research: establish initial baseline
+        track_record = calculate_track_record(recommendation, None)
+
+    recommendation["track_record"] = track_record
+
+    # 5. Append-Only Persistence to Supabase
     persistence_status: Dict[str, Any] = {
         "saved": False,
         "id": None,
@@ -214,8 +273,8 @@ def execute_stock_research(
             "warning": "Supabase persistence skipped: SUPABASE_URL or SUPABASE_KEY not configured.",
         }
 
-    # 5. Format Chat Response
-    explanation = explain_assessment(recommendation, use_gemini=use_gemini)
+    # 6. Format Chat Response
+    explanation = explain_assessment(recommendation, track_record=track_record, use_gemini=use_gemini)
     if persistence_status.get("warning"):
         explanation += f"\n\n> ⚠️ *Audit Persistence Notice: {persistence_status['warning']}*"
 
@@ -227,6 +286,7 @@ def execute_stock_research(
         "data_source": "render_api",
         "recommendation": recommendation,
         "snapshot": research_result,
+        "track_record": track_record,
         "markdown_response": explanation,
         "persistence_status": persistence_status,
     }

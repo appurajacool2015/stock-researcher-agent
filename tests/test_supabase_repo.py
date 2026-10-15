@@ -218,6 +218,143 @@ class TestSupabaseRepository(unittest.TestCase):
         self.assertIsInstance(captured_payload["reason_codes"], list)         # JSONB
         self.assertIsInstance(captured_payload["key_levels"], dict)           # JSONB
 
+    # --------------------------------------------------------------------------
+    # Historical Baseline Lookup Tests (Phase 2B)
+    # --------------------------------------------------------------------------
+
+    @patch("services.supabase_repo.requests.get")
+    def test_get_baseline_valid_record(self, mock_get):
+        """Returns the earliest historical recommendation record with positive CMP."""
+        mock_rec = {
+            "id": "rec-base-001",
+            "symbol": "TCS",
+            "cmp": 3400.0,
+            "investment_action": "BUY_CANDIDATE",
+            "created_at": "2026-10-01T10:00:00Z",
+        }
+        mock_get.return_value = MagicMock(status_code=200, json=lambda: [mock_rec])
+
+        baseline = self.repo.get_baseline_assessment("TCS")
+
+        self.assertIsNotNone(baseline)
+        self.assertEqual(baseline["id"], "rec-base-001")
+        self.assertEqual(baseline["cmp"], 3400.0)
+        self.assertEqual(baseline["created_at"], "2026-10-01T10:00:00Z")
+
+        # Verify correct PostgREST query parameters (order by created_at asc)
+        called_args, called_kwargs = mock_get.call_args
+        params = called_kwargs.get("params", {})
+        self.assertEqual(params.get("symbol"), "eq.TCS")
+        self.assertEqual(params.get("order"), "created_at.asc")
+
+    @patch("services.supabase_repo.requests.get")
+    def test_get_baseline_no_records_returns_none(self, mock_get):
+        """Returns None when symbol has no prior history in database."""
+        mock_get.return_value = MagicMock(status_code=200, json=lambda: [])
+
+        baseline = self.repo.get_baseline_assessment("NEWSTOCK")
+        self.assertIsNone(baseline)
+
+    @patch("services.supabase_repo.requests.get")
+    def test_get_baseline_first_cmp_invalid_finds_subsequent_valid_cmp(self, mock_get):
+        """If earliest record has null/invalid CMP, finds earliest subsequent record with positive CMP."""
+        rec1_no_price = {
+            "id": "rec-base-001",
+            "symbol": "INFY",
+            "cmp": None,  # Missing price on day 1
+            "investment_action": "HOLD_REVIEW",
+            "created_at": "2026-10-01T10:00:00Z",
+        }
+        rec2_with_price = {
+            "id": "rec-base-002",
+            "symbol": "INFY",
+            "cmp": 1450.0,  # Valid positive price on day 3
+            "investment_action": "BUY_CANDIDATE",
+            "created_at": "2026-10-03T10:00:00Z",
+        }
+        mock_get.return_value = MagicMock(status_code=200, json=lambda: [rec1_no_price, rec2_with_price])
+
+        baseline = self.repo.get_baseline_assessment("INFY")
+
+        self.assertIsNotNone(baseline)
+        self.assertEqual(baseline["id"], "rec-base-001")  # Preserves earliest true research run
+        self.assertEqual(baseline["created_at"], "2026-10-01T10:00:00Z")  # Preserves original timestamp
+        self.assertEqual(baseline["cmp"], 1450.0)  # Uses earliest valid positive price
+        self.assertEqual(baseline["cmp_source_timestamp"], "2026-10-03T10:00:00Z")
+
+    @patch("services.supabase_repo.requests.get")
+    def test_get_baseline_all_cmp_invalid_returns_record_with_none_cmp(self, mock_get):
+        """If no record has a positive price, returns earliest record preserving timestamp and None CMP."""
+        rec1 = {
+            "id": "rec-001",
+            "symbol": "WIPRO",
+            "cmp": None,
+            "created_at": "2026-10-01T10:00:00Z",
+        }
+        rec2 = {
+            "id": "rec-002",
+            "symbol": "WIPRO",
+            "cmp": 0.0,
+            "created_at": "2026-10-02T10:00:00Z",
+        }
+        mock_get.return_value = MagicMock(status_code=200, json=lambda: [rec1, rec2])
+
+        baseline = self.repo.get_baseline_assessment("WIPRO")
+
+        self.assertIsNotNone(baseline)
+        self.assertIsNone(baseline["cmp"])
+        self.assertEqual(baseline["created_at"], "2026-10-01T10:00:00Z")
+
+    @patch("services.supabase_repo.requests.get")
+    def test_get_baseline_missing_timestamp_returns_none(self, mock_get):
+        """Malformed record lacking any timestamp returns None."""
+        mock_rec = {
+            "id": "rec-001",
+            "symbol": "TCS",
+            "cmp": 3400.0,
+            # No created_at or assessment_timestamp
+        }
+        mock_get.return_value = MagicMock(status_code=200, json=lambda: [mock_rec])
+
+        baseline = self.repo.get_baseline_assessment("TCS")
+        self.assertIsNone(baseline)
+
+    @patch("services.supabase_repo.requests.get")
+    def test_get_baseline_non_200_http_error(self, mock_get):
+        """HTTP error (403/500) returns None cleanly without crashing."""
+        mock_get.return_value = MagicMock(status_code=403, text="Forbidden")
+
+        baseline = self.repo.get_baseline_assessment("TCS")
+        self.assertIsNone(baseline)
+
+    @patch("services.supabase_repo.requests.get")
+    def test_get_baseline_network_exception(self, mock_get):
+        """Network timeout/connection error returns None cleanly without crashing."""
+        import requests
+        mock_get.side_effect = requests.ConnectionError("Connection failed")
+
+        baseline = self.repo.get_baseline_assessment("TCS")
+        self.assertIsNone(baseline)
+
+    @patch("services.supabase_repo.requests.get")
+    def test_get_baseline_malformed_json_response(self, mock_get):
+        """Non-list or non-dict response returns None cleanly."""
+        mock_get.return_value = MagicMock(status_code=200, json=lambda: {"error": "unexpected format"})
+
+        baseline = self.repo.get_baseline_assessment("TCS")
+        self.assertIsNone(baseline)
+
+    def test_get_baseline_unconfigured_repo_returns_none(self):
+        """Unconfigured repo returns None immediately without attempting HTTP requests."""
+        unconfigured = SupabaseRepository(supabase_url="", supabase_key="")
+        baseline = unconfigured.get_baseline_assessment("TCS")
+        self.assertIsNone(baseline)
+
+    def test_get_baseline_empty_symbol_returns_none(self):
+        """Empty or whitespace symbol returns None immediately."""
+        self.assertIsNone(self.repo.get_baseline_assessment(""))
+        self.assertIsNone(self.repo.get_baseline_assessment("   "))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

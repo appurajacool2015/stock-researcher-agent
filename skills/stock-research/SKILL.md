@@ -21,13 +21,20 @@ The execution entry point is:
 ```
 
 Options:
+- `--env {dev,prod}`: Execution mode (default: `prod`).
+  - `dev`: Scrapes directly via local Python pipeline; completely bypasses Render API and Supabase persistence.
+  - `prod`: Queries Render REST API with 6-hr Supabase caching and audit persistence.
 - `--force-refresh`: Bypass the 6-hour Supabase cache to fetch fresh data from Render.
 - `--allow-local-fallback`: Allow local pipeline execution if the Render API is unreachable.
 - `--json`: Output full structured JSON payload (recommendation + snapshot + audit IDs).
 
 Example:
 ```bash
-.venv-market/bin/python -m skills.stock-research.run TCS
+# Run in dev mode (direct local scraping, no Render/Supabase required)
+.venv-market/bin/python -m skills.stock-research.run TCS --env dev
+
+# Run in prod mode (queries Render API and Supabase cache)
+.venv-market/bin/python -m skills.stock-research.run TCS --env prod
 ```
 
 ---
@@ -35,14 +42,16 @@ Example:
 # 2. Workflow & Cache Rules
 
 1. **Symbol Normalization:** Convert input to valid uppercase alphanumeric ticker (e.g. `TCS`, `INFY`).
-2. **6-Hour Cache Lookup:**
-   - Queries `investment_recommendations` and `research_snapshots` in Supabase.
+2. **Environment & Cache Lookup:**
+   - In `dev` mode: Bypasses Supabase completely and executes local pipeline directly.
+   - In `prod` mode: Queries `investment_recommendations` and `research_snapshots` in Supabase.
    - Verifies `schema_version == "1.0"` and `engine_version == "1.0.0"`.
    - If found and not expired, returns cached result with `is_cached = True`.
-3. **Fresh Fetch via Render REST API:**
-   - On cache miss or `--force-refresh`, requests `GET https://stock-researcher-agent.onrender.com/research/{symbol}`.
+3. **Fresh Fetch via Render REST API (PROD mode):**
+   - **Client Pre-Flight Check:** Verifies `RESEARCH_API_KEY` is present in environment; fails locally before sending unauthenticated network requests.
+   - On cache miss or `--force-refresh`, requests `GET https://stock-researcher-agent.onrender.com/research/{symbol}` with `X-API-Key` header.
    - Bounded 75-second timeout absorbs Render free-tier cold starts.
-   - Retries transient 502/503 errors up to 2 times.
+   - Retries transient 502/503/504 errors up to 2 times.
    - Strict validation of JSON structure and schema.
 4. **Deterministic Investment Assessment:**
    - Derives one of 5 mutually exclusive actions:

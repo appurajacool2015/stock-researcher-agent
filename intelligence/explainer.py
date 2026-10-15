@@ -30,7 +30,10 @@ DISCLAIMER_TEXT = (
 )
 
 
-def format_deterministic_template(rec: Dict[str, Any]) -> str:
+def format_deterministic_template(
+    rec: Dict[str, Any],
+    track_record: Optional[Dict[str, Any]] = None,
+) -> str:
     """
     Format assessment into the 8 required Markdown sections deterministically.
     """
@@ -92,8 +95,9 @@ def format_deterministic_template(rec: Dict[str, Any]) -> str:
     is_cached = rec.get("is_cached", False)
     cache_str = "CACHED (< 6h Snapshot)" if is_cached else "Fresh (Direct Execution)"
 
-    # 5. History / Recommendation ID
+    # 5. History / Recommendation ID & Track Record
     rec_id = rec.get("id") or rec.get("research_run_id") or "UNSAVED_LOCAL_RUN"
+    tr = track_record or rec.get("track_record")
 
     # Build response lines
     lines = [
@@ -123,7 +127,59 @@ def format_deterministic_template(rec: Dict[str, Any]) -> str:
         f"- Cache Status: {cache_str}",
         "",
         "**History:**",
-        f"- Recommendation ID: `{rec_id}`",
+    ])
+
+    # Section 8 Content: Track Record & History
+    if tr and isinstance(tr, dict):
+        status = tr.get("status")
+        if status == "TRACK_RECORD_AVAILABLE" and tr.get("has_prior_history"):
+            first_date = tr.get("first_researched_date_str") or tr.get("first_researched_at") or "EARLIER_DATE"
+            dur_str = tr.get("duration_str") or first_date
+            base_price = tr.get("first_researched_price")
+            base_price_str = f"₹{base_price:,.2f} {currency}" if isinstance(base_price, (int, float)) and base_price > 0 else "UNAVAILABLE"
+
+            lines.append(f"- Research Baseline: First researched {dur_str} at {base_price_str}")
+
+            # Price Return
+            pct_ret = tr.get("price_return_pct")
+            chg = tr.get("price_change")
+            price_note = tr.get("price_return_note")
+            if pct_ret is not None and chg is not None:
+                sign = "+" if chg >= 0 else ""
+                direction = "🟢" if chg >= 0 else "🔴"
+                lines.append(f"- Price Return (Research Baseline): {sign}₹{chg:,.2f} ({sign}{pct_ret:.2f}% {direction})")
+            elif price_note:
+                lines.append(f"- Price Return (Research Baseline): {price_note}")
+            else:
+                lines.append("- Price Return (Research Baseline): UNAVAILABLE")
+
+            # Verdict Tracking & Thesis
+            v_trans = tr.get("verdict_transition")
+            v_note = tr.get("verdict_note")
+            if v_trans:
+                lines.append(f"- Verdict Tracking: {v_trans}")
+            if v_note:
+                lines.append(f"- Thesis Continuity: {v_note}")
+
+            # Mandatory Basis and Disclaimers
+            lines.append("- Performance Basis: Price return on research baseline; excludes dividends, transaction fees, and taxes.")
+            lines.append("- Notice: Prior price movement does not guarantee future results or validate past recommendation accuracy.")
+
+        elif status == "UNAVAILABLE":
+            err_msg = tr.get("note") or tr.get("warning") or "Historical database lookup unavailable."
+            lines.append(f"- Historical Track Record: {err_msg}")
+
+        elif status == "BASELINE_ESTABLISHED" or not tr.get("has_prior_history"):
+            dur_str = tr.get("duration_str") or "today"
+            init_v = tr.get("initial_verdict") or invest_act
+            lines.append(f"- Research Baseline: Initial baseline established {dur_str} at {cmp_str}")
+            lines.append(f"- Initial Verdict: {init_v}")
+            lines.append("- Performance Tracking: Historical price return will be computed on subsequent research checks.")
+
+    # Always preserve Recommendation ID in History
+    lines.append(f"- Recommendation ID: `{rec_id}`")
+
+    lines.extend([
         "",
         "---",
         DISCLAIMER_TEXT,
@@ -195,6 +251,7 @@ Report Data:
 
 def explain_assessment(
     rec: Dict[str, Any],
+    track_record: Optional[Dict[str, Any]] = None,
     use_gemini: bool = True,
     gemini_key: Optional[str] = None,
 ) -> str:
@@ -207,4 +264,4 @@ def explain_assessment(
         if gemini_result:
             return gemini_result
 
-    return format_deterministic_template(rec)
+    return format_deterministic_template(rec, track_record=track_record)
