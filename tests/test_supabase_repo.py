@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from intelligence.investment_assessment import ENGINE_VERSION
-from services.supabase_repo import SupabaseRepository
+from services.supabase_repo import DEFAULT_TIMEOUT_SECONDS, SupabaseRepository, SupabaseRepositoryError
 
 
 class TestSupabaseRepository(unittest.TestCase):
@@ -319,30 +319,45 @@ class TestSupabaseRepository(unittest.TestCase):
         baseline = self.repo.get_baseline_assessment("TCS")
         self.assertIsNone(baseline)
 
+    def test_default_timeout_is_thirty_seconds(self):
+        """DEFAULT_TIMEOUT_SECONDS is configured to 30.0 for cloud resilience."""
+        self.assertEqual(DEFAULT_TIMEOUT_SECONDS, 30.0)
+        repo = SupabaseRepository()
+        self.assertEqual(repo.timeout, 30.0)
+
     @patch("services.supabase_repo.requests.get")
     def test_get_baseline_non_200_http_error(self, mock_get):
-        """HTTP error (403/500) returns None cleanly without crashing."""
+        """HTTP error (403/500) raises SupabaseRepositoryError so caller knows lookup failed."""
         mock_get.return_value = MagicMock(status_code=403, text="Forbidden")
 
-        baseline = self.repo.get_baseline_assessment("TCS")
-        self.assertIsNone(baseline)
+        with self.assertRaises(SupabaseRepositoryError):
+            self.repo.get_baseline_assessment("TCS")
 
     @patch("services.supabase_repo.requests.get")
     def test_get_baseline_network_exception(self, mock_get):
-        """Network timeout/connection error returns None cleanly without crashing."""
+        """Network timeout/connection error raises SupabaseRepositoryError."""
         import requests
         mock_get.side_effect = requests.ConnectionError("Connection failed")
 
-        baseline = self.repo.get_baseline_assessment("TCS")
-        self.assertIsNone(baseline)
+        with self.assertRaises(SupabaseRepositoryError):
+            self.repo.get_baseline_assessment("TCS")
+
+    @patch("services.supabase_repo.requests.get")
+    def test_get_baseline_timeout_exception(self, mock_get):
+        """Network timeout raises SupabaseRepositoryError."""
+        import requests
+        mock_get.side_effect = requests.Timeout("Gateway read timeout")
+
+        with self.assertRaises(SupabaseRepositoryError):
+            self.repo.get_baseline_assessment("TCS")
 
     @patch("services.supabase_repo.requests.get")
     def test_get_baseline_malformed_json_response(self, mock_get):
-        """Non-list or non-dict response returns None cleanly."""
+        """Non-list response raises SupabaseRepositoryError."""
         mock_get.return_value = MagicMock(status_code=200, json=lambda: {"error": "unexpected format"})
 
-        baseline = self.repo.get_baseline_assessment("TCS")
-        self.assertIsNone(baseline)
+        with self.assertRaises(SupabaseRepositoryError):
+            self.repo.get_baseline_assessment("TCS")
 
     def test_get_baseline_unconfigured_repo_returns_none(self):
         """Unconfigured repo returns None immediately without attempting HTTP requests."""

@@ -26,7 +26,12 @@ import requests
 from intelligence.investment_assessment import ENGINE_VERSION
 
 DEFAULT_CACHE_TTL_HOURS = 6.0
-DEFAULT_TIMEOUT_SECONDS = 10.0
+DEFAULT_TIMEOUT_SECONDS = 30.0
+
+
+class SupabaseRepositoryError(Exception):
+    """Raised when a Supabase operation encounters a network, timeout, or server error."""
+    pass
 
 
 class SupabaseRepository:
@@ -200,45 +205,60 @@ class SupabaseRepository:
                 params=params,
                 timeout=self.timeout,
             )
-            if resp.status_code != 200:
-                return None
+        except Exception as exc:
+            raise SupabaseRepositoryError(
+                f"Failed to query baseline for {norm_symbol} due to connection/timeout error: {exc}"
+            ) from exc
 
+        if resp.status_code != 200:
+            raise SupabaseRepositoryError(
+                f"Supabase baseline query returned HTTP {resp.status_code}: {resp.text}"
+            )
+
+        try:
             records = resp.json()
-            if not isinstance(records, list) or not records:
-                return None
+        except Exception as exc:
+            raise SupabaseRepositoryError(
+                f"Supabase baseline query returned non-JSON response: {exc}"
+            ) from exc
 
-            first_rec = records[0]
-            if not isinstance(first_rec, dict):
-                return None
+        if not isinstance(records, list):
+            raise SupabaseRepositoryError(
+                f"Supabase baseline query returned invalid payload format for {norm_symbol}"
+            )
 
-            # Must have a reliable timestamp
-            reliable_ts = first_rec.get("created_at") or first_rec.get("assessment_timestamp")
-            if not reliable_ts:
-                return None
-
-            baseline_result = dict(first_rec)
-
-            # Check if first_rec has a valid positive CMP
-            cmp_val = first_rec.get("cmp")
-            has_valid_positive_cmp = isinstance(cmp_val, (int, float)) and cmp_val > 0
-
-            # If first record's CMP is missing/non-positive, search subsequent records for earliest valid positive CMP
-            if not has_valid_positive_cmp and len(records) > 1:
-                for candidate in records[1:]:
-                    if isinstance(candidate, dict):
-                        cand_cmp = candidate.get("cmp")
-                        if isinstance(cand_cmp, (int, float)) and cand_cmp > 0:
-                            baseline_result["cmp"] = cand_cmp
-                            baseline_result["cmp_source_timestamp"] = (
-                                candidate.get("created_at") or candidate.get("assessment_timestamp")
-                            )
-                            break
-
-            return baseline_result
-
-        except Exception:
-            # Network failures, timeouts, or parsing errors degrade gracefully without crashing research
+        if not records:
+            # Genuinely no records exist for this symbol in the database
             return None
+
+        first_rec = records[0]
+        if not isinstance(first_rec, dict):
+            return None
+
+        # Must have a reliable timestamp
+        reliable_ts = first_rec.get("created_at") or first_rec.get("assessment_timestamp")
+        if not reliable_ts:
+            return None
+
+        baseline_result = dict(first_rec)
+
+        # Check if first_rec has a valid positive CMP
+        cmp_val = first_rec.get("cmp")
+        has_valid_positive_cmp = isinstance(cmp_val, (int, float)) and cmp_val > 0
+
+        # If first record's CMP is missing/non-positive, search subsequent records for earliest valid positive CMP
+        if not has_valid_positive_cmp and len(records) > 1:
+            for candidate in records[1:]:
+                if isinstance(candidate, dict):
+                    cand_cmp = candidate.get("cmp")
+                    if isinstance(cand_cmp, (int, float)) and cand_cmp > 0:
+                        baseline_result["cmp"] = cand_cmp
+                        baseline_result["cmp_source_timestamp"] = (
+                            candidate.get("created_at") or candidate.get("assessment_timestamp")
+                        )
+                        break
+
+        return baseline_result
 
     # ==========================================================================
     # APPEND-ONLY PERSISTENCE
