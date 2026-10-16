@@ -37,6 +37,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from intelligence.buying_zone import evaluate_buying_zone
 from intelligence.fundamentals import analyze_fundamentals
 from intelligence.institutional import analyze_institutional
 from intelligence.news import analyze_news
@@ -240,6 +241,9 @@ def evaluate_investment_assessment(
         or fundamentals_data.get("provenance", {}).get("as_of_date")
     )
 
+    # Evaluate deterministic buying zone entry setup
+    buying_zone_eval = evaluate_buying_zone(research_result)
+
     # --------------------------------------------------------------------------
     # DATA QUALITY & LIMITATIONS AUDIT
     # --------------------------------------------------------------------------
@@ -408,6 +412,7 @@ def evaluate_investment_assessment(
             market_as_of=market_as_of,
             now_utc=now_utc,
             research_run_id=research_result.get("research_id"),
+            buying_zone=buying_zone_eval,
         )
 
     # --------------------------------------------------------------------------
@@ -467,6 +472,7 @@ def evaluate_investment_assessment(
             market_as_of=market_as_of,
             now_utc=now_utc,
             research_run_id=research_result.get("research_id"),
+            buying_zone=buying_zone_eval,
         )
 
     # --------------------------------------------------------------------------
@@ -534,6 +540,7 @@ def evaluate_investment_assessment(
             market_as_of=market_as_of,
             now_utc=now_utc,
             research_run_id=research_result.get("research_id"),
+            buying_zone=buying_zone_eval,
         )
 
     # --------------------------------------------------------------------------
@@ -634,6 +641,7 @@ def evaluate_investment_assessment(
             market_as_of=market_as_of,
             now_utc=now_utc,
             research_run_id=research_result.get("research_id"),
+            buying_zone=buying_zone_eval,
         )
     else:
         # If technical is BUY_CANDIDATE but failed fundamental/valuation checks:
@@ -672,6 +680,7 @@ def evaluate_investment_assessment(
         market_as_of=market_as_of,
         now_utc=now_utc,
         research_run_id=research_result.get("research_id"),
+        buying_zone=buying_zone_eval,
     )
 
 
@@ -694,6 +703,7 @@ def _build_recommendation_dict(
     market_as_of: Optional[str],
     now_utc: str,
     research_run_id: Optional[str],
+    buying_zone: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Helper to assemble a clean, consistent recommendation dictionary."""
     return {
@@ -717,6 +727,7 @@ def _build_recommendation_dict(
         "key_levels": key_levels,
         "limitations": list(dict.fromkeys(limitations)),
         "research_run_id": research_run_id,
+        "buying_zone": buying_zone,
         "is_cached": False,
         "cache_metadata": {},
     }

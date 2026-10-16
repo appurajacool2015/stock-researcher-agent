@@ -104,6 +104,49 @@ def format_deterministic_template(
         f"**Symbol and price:** {symbol} ({company_name}) — CMP: {cmp_str}",
         f"**Technical classification:** {tech_cls}",
         f"**Investment assessment:** {invest_act}",
+    ]
+
+    # Buying Zone Assessment Block
+    bz = rec.get("buying_zone")
+    if bz and isinstance(bz, dict) and bz.get("label"):
+        bz_label = bz["label"]
+        bz_context = bz.get("entry_context", "")
+        supp_ref = bz.get("support_reference")
+        supp_type = bz.get("support_type")
+        inval_ref = bz.get("invalidation_level")
+        down_risk = bz.get("downside_risk_pct")
+        res_ref = bz.get("resistance_reference")
+        res_type = bz.get("resistance_type")
+        up_pot = bz.get("upside_potential_pct")
+        rr_ratio = bz.get("reward_to_risk_ratio")
+
+        lines.extend([
+            "",
+            "**Buying zone assessment:**",
+            f"- Status: **{bz_label}**",
+            f"- Setup: {bz_context}",
+        ])
+        if supp_ref is not None and inval_ref is not None and res_ref is not None:
+            rr_str = f"{rr_ratio:.2f} : 1" if rr_ratio is not None else "UNAVAILABLE"
+            lines.extend([
+                "- Risk/Reward Structure:",
+                f"  - Nearest Support Reference: ₹{supp_ref:,.2f} ({supp_type})",
+                f"  - Invalidation Reference (Stop): ₹{inval_ref:,.2f} (Downside: -{down_risk:.1f}%)",
+                f"  - Target Resistance Reference: ₹{res_ref:,.2f} ({res_type}) (Upside: +{up_pot:.1f}%)",
+                f"  - Reward-to-Risk Ratio: {rr_str}",
+            ])
+        supp_signals = bz.get("supporting_signals") or []
+        conf_signals = bz.get("conflicting_signals") or []
+        if supp_signals:
+            lines.append("- Supporting signals:")
+            for s in supp_signals[:4]:
+                lines.append(f"  • {s}")
+        if conf_signals:
+            lines.append("- Conflicting / Cautionary signals:")
+            for c in conf_signals[:3]:
+                lines.append(f"  • {c}")
+
+    lines.extend([
         "",
         "**Rationale:**",
         f"1. *Business Quality:* {pt1}",
@@ -111,7 +154,7 @@ def format_deterministic_template(
         f"3. *Technical Trend & Volume:* {pt3}",
         "",
         "**Risk and missing data:**",
-    ]
+    ])
     for r in all_risks:
         lines.append(f"- {r}")
 
