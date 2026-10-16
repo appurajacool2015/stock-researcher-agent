@@ -357,6 +357,80 @@ class TestStockResearcherAPI(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         mock_run_pipeline.assert_called_once_with("HDFCBANK")
 
+    @patch("interfaces.api.SupabaseRepository")
+    @patch("interfaces.api.run_pipeline")
+    def test_server_side_persistence_when_configured(self, mock_run_pipeline, mock_repo_cls):
+        """When Supabase is configured on server, research results and assessments are persisted."""
+        mock_result = make_mock_research_result("TCS")
+        mock_run_pipeline.return_value = mock_result
+
+        mock_repo = MagicMock()
+        mock_repo.is_configured = True
+        mock_repo.get_cached_assessment.return_value = (None, None)
+        mock_repo.get_baseline_assessment.return_value = None
+        mock_repo.save_research_snapshot.return_value = {"saved": True, "id": "snap-server-1"}
+        mock_repo.save_recommendation.return_value = {"saved": True, "id": "rec-server-1"}
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.get("/research/TCS", headers=self.auth_headers)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+
+        self.assertIn("_persistence", data)
+        self.assertTrue(data["_persistence"]["saved"])
+        self.assertEqual(data["_persistence"]["snapshot_id"], "snap-server-1")
+        self.assertEqual(data["_persistence"]["recommendation_id"], "rec-server-1")
+        self.assertFalse(data["_persistence"]["is_cached"])
+        mock_repo.save_research_snapshot.assert_called_once()
+        mock_repo.save_recommendation.assert_called_once()
+
+    @patch("interfaces.api.SupabaseRepository")
+    @patch("interfaces.api.run_pipeline")
+    def test_server_side_cache_hit_returns_without_pipeline(self, mock_run_pipeline, mock_repo_cls):
+        """When a valid 6-hour cache exists on server, returns cached data without invoking pipeline."""
+        mock_rec = {
+            "id": "rec-cached-server",
+            "symbol": "TCS",
+            "cmp": 3500.0,
+            "created_at": "2026-10-16T10:00:00Z",
+        }
+        mock_snap = make_mock_research_result("TCS")
+
+        mock_repo = MagicMock()
+        mock_repo.is_configured = True
+        mock_repo.get_cached_assessment.return_value = (mock_rec, mock_snap)
+        mock_repo.get_baseline_assessment.return_value = None
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.get("/research/TCS", headers=self.auth_headers)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+
+        self.assertIn("_persistence", data)
+        self.assertTrue(data["_persistence"]["is_cached"])
+        self.assertEqual(data["_persistence"]["recommendation_id"], "rec-cached-server")
+        mock_run_pipeline.assert_not_called()
+
+    @patch("interfaces.api.SupabaseRepository")
+    @patch("interfaces.api.run_pipeline")
+    def test_server_side_persistence_unconfigured_graceful(self, mock_run_pipeline, mock_repo_cls):
+        """When Supabase is not configured on server, returns 200 with saved=False in _persistence."""
+        mock_result = make_mock_research_result("TCS")
+        mock_run_pipeline.return_value = mock_result
+
+        mock_repo = MagicMock()
+        mock_repo.is_configured = False
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.get("/research/TCS", headers=self.auth_headers)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+
+        self.assertIn("_persistence", data)
+        self.assertFalse(data["_persistence"]["saved"])
+        self.assertIn("not configured", data["_persistence"]["warning"])
+
+
     def test_post_research_empty_symbol_400(self):
         """POST /research with empty symbol returns 400 Bad Request."""
         resp = self.client.post("/research", json={"symbol": "   "}, headers=self.auth_headers)

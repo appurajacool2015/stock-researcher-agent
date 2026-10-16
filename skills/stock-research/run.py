@@ -35,9 +35,8 @@ from intelligence.explainer import explain_assessment
 from intelligence.investment_assessment import evaluate_investment_assessment
 from intelligence.track_record import calculate_track_record
 from interfaces.research_cli import normalize_symbol
-from services.research_client import ResearchClient, RenderAPIError
+from services.research_client import ResearchClient
 from services.research_pipeline import run_pipeline
-from services.supabase_repo import SupabaseRepository
 
 VALID_ENVIRONMENTS = {"dev", "prod"}
 DEFAULT_ENVIRONMENT = "prod"
@@ -145,135 +144,46 @@ def execute_stock_research(
         }
 
     # ----------------------------------------------------
-    # PROD Mode: Render REST API with Supabase persistence
+    # PROD Mode: Render REST API (server handles persistence)
     # ----------------------------------------------------
-    repo = SupabaseRepository()
     client = ResearchClient()
 
-    # 1. Cache Check
-    cached_rec, cached_snap = repo.get_cached_assessment(
-        symbol=symbol,
-        force_refresh=force_refresh,
-    )
-
-    if cached_rec is not None and cached_snap is not None:
-        # Retrieve historical baseline for cached assessment without creating duplicates
-        baseline_rec = None
-        if repo.is_configured:
-            try:
-                base_cand = repo.get_baseline_assessment(symbol)
-                if isinstance(base_cand, dict):
-                    baseline_rec = base_cand
-            except Exception:
-                baseline_rec = None
-
-        if baseline_rec is not None:
-            track_record = calculate_track_record(cached_rec, baseline_rec)
-        elif not repo.is_configured:
-            track_record = {
-                "status": "UNAVAILABLE",
-                "note": "Supabase not configured; historical track record unavailable.",
-            }
-        else:
-            # Baseline query returned None (no database records) -> establishes baseline
-            track_record = calculate_track_record(cached_rec, None)
-
-        cached_rec["track_record"] = track_record
-        explanation = explain_assessment(cached_rec, track_record=track_record, use_gemini=use_gemini)
-        return {
-            "ok": True,
-            "symbol": symbol,
-            "is_cached": True,
-            "execution_env": "prod",
-            "data_source": "render_api",
-            "recommendation": cached_rec,
-            "snapshot": cached_snap,
-            "track_record": track_record,
-            "markdown_response": explanation,
-            "persistence_status": {
-                "saved": True,
-                "id": cached_rec.get("id"),
-                "is_cached": True,
-            },
-        }
-
-    # 2. Fresh Fetch via Render API (PROD mode never allows local fallback)
+    # 1. Fresh Fetch via Render API
+    #    The Render server handles: cache check, baseline lookup, Supabase writes.
+    #    The response includes a `_persistence` block with snapshot_id,
+    #    recommendation_id, track_record, and is_cached.
     research_result = client.fetch_research(
         raw_symbol=symbol,
         allow_local_fallback=False,
     )
 
-    # 3. Deterministic Investment Assessment
-    recommendation = evaluate_investment_assessment(research_result)
-
-    # 4. Retrieve Baseline BEFORE saving new record (prevents self-comparison)
-    baseline_rec = None
-    baseline_lookup_failed = False
-    if repo.is_configured:
-        try:
-            base_cand = repo.get_baseline_assessment(symbol)
-            if isinstance(base_cand, dict):
-                baseline_rec = base_cand
-        except Exception:
-            baseline_lookup_failed = True
-
-    if baseline_rec is not None:
-        track_record = calculate_track_record(recommendation, baseline_rec)
-    elif baseline_lookup_failed:
-        track_record = {
-            "status": "UNAVAILABLE",
-            "note": "Historical track record temporarily unavailable due to database lookup error.",
-        }
-    elif not repo.is_configured:
-        track_record = {
-            "status": "UNAVAILABLE",
-            "note": "Supabase not configured; historical track record unavailable.",
-        }
-    else:
-        # First-time research: establish initial baseline
-        track_record = calculate_track_record(recommendation, None)
-
-    recommendation["track_record"] = track_record
-
-    # 5. Append-Only Persistence to Supabase
-    persistence_status: Dict[str, Any] = {
-        "saved": False,
-        "id": None,
-        "warning": None,
+    # 2. Read persistence metadata from server response
+    persistence_block = research_result.pop("_persistence", {})
+    is_cached = persistence_block.get("is_cached", False)
+    track_record = persistence_block.get("track_record") or {
+        "status": "UNAVAILABLE",
+        "note": "Track record not returned by server.",
     }
 
-    if repo.is_configured:
-        snap_save_result = repo.save_research_snapshot(research_result)
-        if snap_save_result.get("saved") and snap_save_result.get("id"):
-            snapshot_id = snap_save_result["id"]
-            rec_save_result = repo.save_recommendation(recommendation, snapshot_id)
-            if rec_save_result.get("saved"):
-                recommendation["id"] = rec_save_result.get("id")
-                persistence_status = {
-                    "saved": True,
-                    "id": rec_save_result.get("id"),
-                    "snapshot_id": snapshot_id,
-                    "is_duplicate": rec_save_result.get("is_duplicate", False),
-                }
-            else:
-                persistence_status = {
-                    "saved": False,
-                    "warning": rec_save_result.get("warning") or "Recommendation persistence failed.",
-                    "error": rec_save_result.get("error"),
-                }
-        else:
-            persistence_status = {
-                "saved": False,
-                "warning": snap_save_result.get("warning") or "Snapshot persistence failed.",
-                "error": snap_save_result.get("error"),
-            }
-    else:
-        persistence_status = {
-            "saved": False,
-            "warning": "Supabase persistence skipped: SUPABASE_URL or SUPABASE_KEY not configured.",
-        }
+    # 3. Deterministic Investment Assessment (always re-derived locally for chat output)
+    recommendation = evaluate_investment_assessment(research_result)
+    recommendation["track_record"] = track_record
 
-    # 6. Format Chat Response
+    # Restore IDs from server persistence block if available
+    if persistence_block.get("recommendation_id"):
+        recommendation["id"] = persistence_block["recommendation_id"]
+
+    # 4. Persistence status for display
+    persistence_status: Dict[str, Any] = {
+        "saved": persistence_block.get("saved", False),
+        "id": persistence_block.get("recommendation_id"),
+        "snapshot_id": persistence_block.get("snapshot_id"),
+        "is_cached": is_cached,
+        "is_duplicate": persistence_block.get("is_duplicate", False),
+        "warning": persistence_block.get("warning"),
+    }
+
+    # 5. Format Chat Response
     explanation = explain_assessment(recommendation, track_record=track_record, use_gemini=use_gemini)
     if persistence_status.get("warning"):
         explanation += f"\n\n> ⚠️ *Audit Persistence Notice: {persistence_status['warning']}*"
@@ -281,7 +191,7 @@ def execute_stock_research(
     return {
         "ok": True,
         "symbol": symbol,
-        "is_cached": False,
+        "is_cached": is_cached,
         "execution_env": "prod",
         "data_source": "render_api",
         "recommendation": recommendation,

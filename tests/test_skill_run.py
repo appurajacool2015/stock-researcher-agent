@@ -3,8 +3,8 @@
 Unit tests for skills/stock-research/run.py
 
 Verifies:
-1. End-to-end execution on cache hit.
-2. End-to-end execution on cache miss (Fetch -> Assess -> Persist -> Explain).
+1. End-to-end execution on cache hit (server signals is_cached=True via _persistence).
+2. End-to-end execution on cache miss (Fetch -> Assess -> Explain; persistence from _persistence block).
 3. Unconfigured persistence handles gracefully and surfaces persistence notice.
 4. CLI parsing and JSON output mode.
 """
@@ -66,47 +66,72 @@ def _mock_research_result(symbol: str = "TCS") -> dict:
     }
 
 
+def _mock_api_response(symbol: str = "TCS", persistence_override: dict | None = None) -> dict:
+    """Return a simulated Render API response including a _persistence block."""
+    base = _mock_research_result(symbol)
+    base["_persistence"] = persistence_override if persistence_override is not None else {
+        "saved": True,
+        "is_cached": False,
+        "recommendation_id": "rec-new-1",
+        "snapshot_id": "snap-new-1",
+        "is_duplicate": False,
+        "track_record": {
+            "status": "BASELINE_ESTABLISHED",
+            "has_prior_history": False,
+            "note": "Initial research baseline established.",
+        },
+        "warning": None,
+    }
+    return base
+
+
+def _mock_cached_api_response(symbol: str = "TCS") -> dict:
+    """Simulate a Render API response for a cache hit."""
+    base = _mock_research_result(symbol)
+    base["_persistence"] = {
+        "saved": True,
+        "is_cached": True,
+        "recommendation_id": "rec-cached-1",
+        "snapshot_id": "snap-cached-1",
+        "is_duplicate": False,
+        "track_record": {
+            "status": "TRACK_RECORD_AVAILABLE",
+            "has_prior_history": True,
+            "first_researched_price": 3000.0,
+            "latest_price": 3500.0,
+            "price_change": 500.0,
+            "price_return_pct": 16.67,
+            "note": "Price return since initial baseline.",
+        },
+        "warning": None,
+    }
+    return base
+
+
 class TestSkillRun(unittest.TestCase):
 
-    @patch.object(_skill_run_mod, "SupabaseRepository")
-    def test_cache_hit_execution(self, mock_repo_cls):
-        """When cache returns valid data, execute_stock_research returns cached payload directly."""
-        mock_repo = MagicMock()
-        mock_rec = {
-            "id": "rec-cached-1",
-            "symbol": "TCS",
-            "company_name": "Tata Consultancy Services Ltd",
-            "technical_classification": "BUY_CANDIDATE",
-            "investment_action": "BUY_CANDIDATE",
-            "is_cached": True,
-        }
-        mock_snap = _mock_research_result("TCS")
-        mock_repo.get_cached_assessment.return_value = (mock_rec, mock_snap)
-        mock_repo_cls.return_value = mock_repo
+    @patch.object(_skill_run_mod, "ResearchClient")
+    def test_cache_hit_execution(self, mock_client_cls):
+        """When server signals is_cached=True in _persistence, execute_stock_research returns cached payload."""
+        mock_client = MagicMock()
+        mock_client.fetch_research.return_value = _mock_cached_api_response("TCS")
+        mock_client_cls.return_value = mock_client
 
         result = execute_stock_research("tcs")
 
         self.assertTrue(result["ok"])
         self.assertTrue(result["is_cached"])
-        self.assertEqual(result["recommendation"]["id"], "rec-cached-1")
-        mock_repo.get_cached_assessment.assert_called_once_with(
-            symbol="TCS",
-            force_refresh=False,
+        self.assertEqual(result["persistence_status"]["id"], "rec-cached-1")
+        mock_client.fetch_research.assert_called_once_with(
+            raw_symbol="TCS",
+            allow_local_fallback=False,
         )
 
     @patch.object(_skill_run_mod, "ResearchClient")
-    @patch.object(_skill_run_mod, "SupabaseRepository")
-    def test_cache_miss_full_pipeline(self, mock_repo_cls, mock_client_cls):
-        """Cache miss fetches from Render, evaluates assessment, and persists to Supabase."""
-        mock_repo = MagicMock()
-        mock_repo.is_configured = True
-        mock_repo.get_cached_assessment.return_value = (None, None)
-        mock_repo.save_research_snapshot.return_value = {"saved": True, "id": "snap-new-1"}
-        mock_repo.save_recommendation.return_value = {"saved": True, "id": "rec-new-1"}
-        mock_repo_cls.return_value = mock_repo
-
+    def test_cache_miss_full_pipeline(self, mock_client_cls):
+        """Cache miss: server runs fresh pipeline and returns persistence metadata in _persistence block."""
         mock_client = MagicMock()
-        mock_client.fetch_research.return_value = _mock_research_result("INFY")
+        mock_client.fetch_research.return_value = _mock_api_response("INFY")
         mock_client_cls.return_value = mock_client
 
         result = execute_stock_research("INFY")
@@ -121,16 +146,21 @@ class TestSkillRun(unittest.TestCase):
         )
 
     @patch.object(_skill_run_mod, "ResearchClient")
-    @patch.object(_skill_run_mod, "SupabaseRepository")
-    def test_unconfigured_persistence_surfaces_notice(self, mock_repo_cls, mock_client_cls):
-        """Unconfigured Supabase repo surfaces persistence notice in markdown without failing."""
-        mock_repo = MagicMock()
-        mock_repo.is_configured = False
-        mock_repo.get_cached_assessment.return_value = (None, None)
-        mock_repo_cls.return_value = mock_repo
-
+    def test_unconfigured_persistence_surfaces_notice(self, mock_client_cls):
+        """Server returns saved=False with warning; client surfaces persistence notice in markdown."""
         mock_client = MagicMock()
-        mock_client.fetch_research.return_value = _mock_research_result("RELIANCE")
+        mock_client.fetch_research.return_value = _mock_api_response(
+            "RELIANCE",
+            persistence_override={
+                "saved": False,
+                "is_cached": False,
+                "recommendation_id": None,
+                "snapshot_id": None,
+                "is_duplicate": False,
+                "track_record": {"status": "UNAVAILABLE", "note": "Supabase not configured on server."},
+                "warning": "Supabase not configured on server; persistence skipped.",
+            },
+        )
         mock_client_cls.return_value = mock_client
 
         result = execute_stock_research("RELIANCE")
@@ -140,22 +170,21 @@ class TestSkillRun(unittest.TestCase):
         self.assertIn("Audit Persistence Notice:", result["markdown_response"])
 
     @patch.object(_skill_run_mod, "ResearchClient")
-    @patch.object(_skill_run_mod, "SupabaseRepository")
-    def test_snapshot_persistence_failure_includes_error(self, mock_repo_cls, mock_client_cls):
-        """When snapshot persistence fails, persistence_status includes the repository error."""
-        mock_repo = MagicMock()
-        mock_repo.is_configured = True
-        mock_repo.get_cached_assessment.return_value = (None, None)
-        mock_repo.save_research_snapshot.return_value = {
-            "saved": False,
-            "id": None,
-            "error": 'HTTP 403: {"code":"42501","message":"new row violates row-level security policy"}',
-            "warning": "Assessment generated successfully but snapshot persistence failed.",
-        }
-        mock_repo_cls.return_value = mock_repo
-
+    def test_snapshot_persistence_failure_includes_warning(self, mock_client_cls):
+        """When server reports snapshot persistence failure, persistence_status reflects the warning."""
         mock_client = MagicMock()
-        mock_client.fetch_research.return_value = _mock_research_result("TCS")
+        mock_client.fetch_research.return_value = _mock_api_response(
+            "TCS",
+            persistence_override={
+                "saved": False,
+                "is_cached": False,
+                "recommendation_id": None,
+                "snapshot_id": None,
+                "is_duplicate": False,
+                "track_record": {"status": "UNAVAILABLE", "note": "Persistence failed."},
+                "warning": "Assessment generated successfully but snapshot persistence failed.",
+            },
+        )
         mock_client_cls.return_value = mock_client
 
         result = execute_stock_research("TCS")
@@ -166,30 +195,23 @@ class TestSkillRun(unittest.TestCase):
             result["persistence_status"]["warning"],
             "Assessment generated successfully but snapshot persistence failed.",
         )
-        self.assertEqual(
-            result["persistence_status"]["error"],
-            'HTTP 403: {"code":"42501","message":"new row violates row-level security policy"}',
-        )
-        mock_repo.save_recommendation.assert_not_called()
 
     @patch.object(_skill_run_mod, "ResearchClient")
-    @patch.object(_skill_run_mod, "SupabaseRepository")
-    def test_recommendation_persistence_failure_includes_error(self, mock_repo_cls, mock_client_cls):
-        """When recommendation persistence fails, persistence_status includes the repository error."""
-        mock_repo = MagicMock()
-        mock_repo.is_configured = True
-        mock_repo.get_cached_assessment.return_value = (None, None)
-        mock_repo.save_research_snapshot.return_value = {"saved": True, "id": "snap-ok-1"}
-        mock_repo.save_recommendation.return_value = {
-            "saved": False,
-            "id": None,
-            "error": 'HTTP 400: {"message":"invalid input syntax for type numeric"}',
-            "warning": "Assessment generated successfully but recommendation persistence failed.",
-        }
-        mock_repo_cls.return_value = mock_repo
-
+    def test_recommendation_persistence_failure_includes_warning(self, mock_client_cls):
+        """When server reports recommendation persistence failure, persistence_status reflects the warning."""
         mock_client = MagicMock()
-        mock_client.fetch_research.return_value = _mock_research_result("TCS")
+        mock_client.fetch_research.return_value = _mock_api_response(
+            "TCS",
+            persistence_override={
+                "saved": False,
+                "is_cached": False,
+                "recommendation_id": None,
+                "snapshot_id": "snap-ok-1",
+                "is_duplicate": False,
+                "track_record": {"status": "UNAVAILABLE", "note": "Recommendation write failed."},
+                "warning": "Assessment generated successfully but recommendation persistence failed.",
+            },
+        )
         mock_client_cls.return_value = mock_client
 
         result = execute_stock_research("TCS")
@@ -200,22 +222,12 @@ class TestSkillRun(unittest.TestCase):
             result["persistence_status"]["warning"],
             "Assessment generated successfully but recommendation persistence failed.",
         )
-        self.assertEqual(
-            result["persistence_status"]["error"],
-            'HTTP 400: {"message":"invalid input syntax for type numeric"}',
-        )
 
     @patch.object(_skill_run_mod, "ResearchClient")
-    @patch.object(_skill_run_mod, "SupabaseRepository")
-    def test_default_env_is_prod(self, mock_repo_cls, mock_client_cls):
-        """Default execution environment is PROD with Render API routing and Supabase persistence."""
-        mock_repo = MagicMock()
-        mock_repo.is_configured = False
-        mock_repo.get_cached_assessment.return_value = (None, None)
-        mock_repo_cls.return_value = mock_repo
-
+    def test_default_env_is_prod(self, mock_client_cls):
+        """Default execution environment is PROD with Render API routing."""
         mock_client = MagicMock()
-        mock_client.fetch_research.return_value = _mock_research_result("TCS")
+        mock_client.fetch_research.return_value = _mock_api_response("TCS")
         mock_client_cls.return_value = mock_client
 
         with patch.dict(os.environ, {}, clear=False):
@@ -283,13 +295,8 @@ class TestSkillRun(unittest.TestCase):
         self.assertIn("Must be 'dev' or 'prod'", str(ctx.exception))
 
     @patch.object(_skill_run_mod, "ResearchClient")
-    @patch.object(_skill_run_mod, "SupabaseRepository")
-    def test_prod_mode_never_allows_local_fallback_on_render_failure(self, mock_repo_cls, mock_client_cls):
+    def test_prod_mode_never_allows_local_fallback_on_render_failure(self, mock_client_cls):
         """PROD mode strictly passes allow_local_fallback=False and raises on Render failure."""
-        mock_repo = MagicMock()
-        mock_repo.get_cached_assessment.return_value = (None, None)
-        mock_repo_cls.return_value = mock_repo
-
         mock_client = MagicMock()
         mock_client.fetch_research.side_effect = RenderAPIError("Render API 503 Service Unavailable")
         mock_client_cls.return_value = mock_client
@@ -303,11 +310,9 @@ class TestSkillRun(unittest.TestCase):
                 allow_local_fallback=False,
             )
             mock_pipeline.assert_not_called()
-            mock_repo.save_research_snapshot.assert_not_called()
 
     @patch.object(_skill_run_mod, "ResearchClient")
-    @patch.object(_skill_run_mod, "SupabaseRepository")
-    def test_dev_mode_local_pipeline_and_supabase_bypass(self, mock_repo_cls, mock_client_cls):
+    def test_dev_mode_local_pipeline_and_supabase_bypass(self, mock_client_cls):
         """DEV mode routes to local pipeline and completely bypasses Supabase cache and persistence."""
         mock_pipeline_result = _mock_research_result("TCS")
 
@@ -330,7 +335,6 @@ class TestSkillRun(unittest.TestCase):
 
             mock_local_run.assert_called_once_with(symbol="TCS")
             mock_client_cls.assert_not_called()
-            mock_repo_cls.assert_not_called()
 
     def test_dev_mode_invokes_pipeline_exactly_once(self):
         """DEV mode directly invokes run_pipeline exactly once using its verified signature."""
@@ -346,32 +350,23 @@ class TestSkillRun(unittest.TestCase):
         self.assertEqual(result["data_source"], "local_pipeline")
 
     @patch.object(_skill_run_mod, "ResearchClient")
-    @patch.object(_skill_run_mod, "SupabaseRepository")
-    def test_backward_compatibility_positional_calls(self, mock_repo_cls, mock_client_cls):
+    def test_backward_compatibility_positional_calls(self, mock_client_cls):
         """Existing positional calls retain their argument semantics without distortion."""
-        mock_repo = MagicMock()
-        mock_repo.is_configured = False
-        mock_repo.get_cached_assessment.return_value = (None, None)
-        mock_repo_cls.return_value = mock_repo
-
         mock_client = MagicMock()
-        mock_client.fetch_research.return_value = _mock_research_result("TCS")
+        mock_client.fetch_research.return_value = _mock_api_response("TCS")
         mock_client_cls.return_value = mock_client
 
         # 1. Single positional argument: (raw_symbol)
         res1 = execute_stock_research("TCS")
         self.assertEqual(res1["execution_env"], "prod")
-        mock_repo.get_cached_assessment.assert_called_with(symbol="TCS", force_refresh=False)
 
-        # 2. Two positional arguments: (raw_symbol, force_refresh)
+        # 2. Two positional arguments: (raw_symbol, force_refresh) — force_refresh ignored server-side
         res2 = execute_stock_research("TCS", True)
         self.assertEqual(res2["execution_env"], "prod")
-        mock_repo.get_cached_assessment.assert_called_with(symbol="TCS", force_refresh=True)
 
         # 3. Three positional arguments: (raw_symbol, force_refresh, allow_local_fallback)
         res3 = execute_stock_research("TCS", False, True)
         self.assertEqual(res3["execution_env"], "prod")
-        mock_repo.get_cached_assessment.assert_called_with(symbol="TCS", force_refresh=False)
 
         # 4. Four positional arguments: (raw_symbol, force_refresh, allow_local_fallback, use_gemini)
         res4 = execute_stock_research("TCS", False, False, False)
@@ -386,16 +381,10 @@ class TestSkillRun(unittest.TestCase):
             mock_local_run.assert_called_once_with(symbol="TCS")
 
     @patch.object(_skill_run_mod, "ResearchClient")
-    @patch.object(_skill_run_mod, "SupabaseRepository")
-    def test_cli_main_prod_mode(self, mock_repo_cls, mock_client_cls):
+    def test_cli_main_prod_mode(self, mock_client_cls):
         """CLI main in PROD mode outputs JSON with execution_env: prod and data_source: render_api."""
-        mock_repo = MagicMock()
-        mock_repo.is_configured = False
-        mock_repo.get_cached_assessment.return_value = (None, None)
-        mock_repo_cls.return_value = mock_repo
-
         mock_client = MagicMock()
-        mock_client.fetch_research.return_value = _mock_research_result("INFY")
+        mock_client.fetch_research.return_value = _mock_api_response("INFY")
         mock_client_cls.return_value = mock_client
 
         stdout_buf = io.StringIO()
@@ -441,42 +430,31 @@ class TestSkillRun(unittest.TestCase):
         self.assertIn("Must be 'dev' or 'prod'", output["error"]["message"])
 
     @patch.object(_skill_run_mod, "ResearchClient")
-    @patch.object(_skill_run_mod, "SupabaseRepository")
-    def test_track_record_first_time_research_establishes_baseline(self, mock_repo_cls, mock_client_cls):
-        """First-time research establishes baseline before persisting to prevent self-comparison."""
-        call_order = []
-        mock_repo = MagicMock()
-        mock_repo.is_configured = True
-        mock_repo.get_cached_assessment.return_value = (None, None)
-
-        def mock_get_baseline(symbol):
-            call_order.append("get_baseline")
-            return None
-
-        def mock_save_snapshot(snapshot):
-            call_order.append("save_snapshot")
-            return {"saved": True, "id": "snap-1"}
-
-        def mock_save_rec(rec, snap_id):
-            call_order.append("save_rec")
-            return {"saved": True, "id": "rec-1"}
-
-        mock_repo.get_baseline_assessment.side_effect = mock_get_baseline
-        mock_repo.save_research_snapshot.side_effect = mock_save_snapshot
-        mock_repo.save_recommendation.side_effect = mock_save_rec
-        mock_repo_cls.return_value = mock_repo
-
+    def test_track_record_first_time_research_establishes_baseline(self, mock_client_cls):
+        """Server signals BASELINE_ESTABLISHED in _persistence; client exposes it in track_record."""
         mock_client = MagicMock()
-        mock_client.fetch_research.return_value = _mock_research_result("TCS")
+        mock_client.fetch_research.return_value = _mock_api_response(
+            "TCS",
+            persistence_override={
+                "saved": True,
+                "is_cached": False,
+                "recommendation_id": "rec-1",
+                "snapshot_id": "snap-1",
+                "is_duplicate": False,
+                "track_record": {
+                    "status": "BASELINE_ESTABLISHED",
+                    "has_prior_history": False,
+                    "note": "Initial research baseline established. No prior history to compare.",
+                },
+                "warning": None,
+            },
+        )
         mock_client_cls.return_value = mock_client
 
         result = execute_stock_research("TCS")
 
         self.assertTrue(result["ok"])
         self.assertFalse(result["is_cached"])
-        # Baseline must be queried BEFORE saving new records to prevent self-comparison
-        self.assertEqual(call_order, ["get_baseline", "save_snapshot", "save_rec"])
-
         tr = result["track_record"]
         self.assertEqual(tr["status"], "BASELINE_ESTABLISHED")
         self.assertFalse(tr["has_prior_history"])
@@ -484,26 +462,29 @@ class TestSkillRun(unittest.TestCase):
         self.assertIn("Initial baseline established", result["markdown_response"])
 
     @patch.object(_skill_run_mod, "ResearchClient")
-    @patch.object(_skill_run_mod, "SupabaseRepository")
-    def test_track_record_subsequent_research_computes_return_against_baseline(self, mock_repo_cls, mock_client_cls):
-        """Subsequent research computes price return and elapsed time against prior baseline."""
-        mock_repo = MagicMock()
-        mock_repo.is_configured = True
-        mock_repo.get_cached_assessment.return_value = (None, None)
-        mock_repo.get_baseline_assessment.return_value = {
-            "id": "rec-base-1",
-            "symbol": "TCS",
-            "cmp": 3000.0,
-            "investment_action": "BUY_CANDIDATE",
-            "created_at": "2026-01-01T10:00:00Z",
-        }
-        mock_repo.save_research_snapshot.return_value = {"saved": True, "id": "snap-2"}
-        mock_repo.save_recommendation.return_value = {"saved": True, "id": "rec-2"}
-        mock_repo_cls.return_value = mock_repo
-
+    def test_track_record_subsequent_research_computes_return_against_baseline(self, mock_client_cls):
+        """Server computes track record and returns it in _persistence; client exposes it correctly."""
         mock_client = MagicMock()
-        # Mock research CMP is 3500.0
-        mock_client.fetch_research.return_value = _mock_research_result("TCS")
+        mock_client.fetch_research.return_value = _mock_api_response(
+            "TCS",
+            persistence_override={
+                "saved": True,
+                "is_cached": False,
+                "recommendation_id": "rec-2",
+                "snapshot_id": "snap-2",
+                "is_duplicate": False,
+                "track_record": {
+                    "status": "TRACK_RECORD_AVAILABLE",
+                    "has_prior_history": True,
+                    "first_researched_price": 3000.0,
+                    "latest_price": 3500.0,
+                    "price_change": 500.0,
+                    "price_return_pct": 16.67,
+                    "note": "Price return since initial baseline.",
+                },
+                "warning": None,
+            },
+        )
         mock_client_cls.return_value = mock_client
 
         result = execute_stock_research("TCS")
@@ -520,30 +501,12 @@ class TestSkillRun(unittest.TestCase):
         self.assertIn("Price Return (Research Baseline):", result["markdown_response"])
         self.assertIn("+16.67%", result["markdown_response"])
 
-    @patch.object(_skill_run_mod, "SupabaseRepository")
-    def test_track_record_cache_hit_preserves_history_with_zero_duplicate_inserts(self, mock_repo_cls):
-        """Cache hit attaches track record from baseline without creating duplicate DB records."""
-        mock_repo = MagicMock()
-        mock_repo.is_configured = True
-        mock_rec = {
-            "id": "rec-cached-1",
-            "symbol": "TCS",
-            "company_name": "Tata Consultancy Services Ltd",
-            "cmp": 3600.0,
-            "technical_classification": "BUY_CANDIDATE",
-            "investment_action": "BUY_CANDIDATE",
-            "created_at": "2026-10-15T08:00:00Z",
-        }
-        mock_snap = _mock_research_result("TCS")
-        mock_repo.get_cached_assessment.return_value = (mock_rec, mock_snap)
-        mock_repo.get_baseline_assessment.return_value = {
-            "id": "rec-base-1",
-            "symbol": "TCS",
-            "cmp": 3000.0,
-            "investment_action": "BUY_CANDIDATE",
-            "created_at": "2026-01-01T10:00:00Z",
-        }
-        mock_repo_cls.return_value = mock_repo
+    @patch.object(_skill_run_mod, "ResearchClient")
+    def test_track_record_cache_hit_preserves_history_with_zero_duplicate_inserts(self, mock_client_cls):
+        """Cache hit: server returns is_cached=True and track record; client makes no extra DB calls."""
+        mock_client = MagicMock()
+        mock_client.fetch_research.return_value = _mock_cached_api_response("TCS")
+        mock_client_cls.return_value = mock_client
 
         result = execute_stock_research("TCS")
 
@@ -552,28 +515,32 @@ class TestSkillRun(unittest.TestCase):
         tr = result["track_record"]
         self.assertEqual(tr["status"], "TRACK_RECORD_AVAILABLE")
         self.assertEqual(tr["first_researched_price"], 3000.0)
-        self.assertEqual(tr["latest_price"], 3600.0)
-        self.assertEqual(tr["price_change"], 600.0)
-        self.assertAlmostEqual(tr["price_return_pct"], 20.0, places=2)
+        self.assertEqual(tr["latest_price"], 3500.0)
+        self.assertEqual(tr["price_change"], 500.0)
+        self.assertAlmostEqual(tr["price_return_pct"], 16.67, places=2)
 
-        # Zero calls to save new records on cache hit
-        mock_repo.save_research_snapshot.assert_not_called()
-        mock_repo.save_recommendation.assert_not_called()
+        # Client makes exactly one API call; no Supabase calls from client side
+        mock_client.fetch_research.assert_called_once()
 
     @patch.object(_skill_run_mod, "ResearchClient")
-    @patch.object(_skill_run_mod, "SupabaseRepository")
-    def test_track_record_database_failure_resilience(self, mock_repo_cls, mock_client_cls):
-        """When baseline query fails, research execution succeeds with history-unavailable status."""
-        mock_repo = MagicMock()
-        mock_repo.is_configured = True
-        mock_repo.get_cached_assessment.return_value = (None, None)
-        mock_repo.get_baseline_assessment.side_effect = RuntimeError("Database timeout 504")
-        mock_repo.save_research_snapshot.return_value = {"saved": True, "id": "snap-1"}
-        mock_repo.save_recommendation.return_value = {"saved": True, "id": "rec-1"}
-        mock_repo_cls.return_value = mock_repo
-
+    def test_track_record_database_failure_resilience(self, mock_client_cls):
+        """Server signals UNAVAILABLE track record on DB failure; client surfaces it without crashing."""
         mock_client = MagicMock()
-        mock_client.fetch_research.return_value = _mock_research_result("TCS")
+        mock_client.fetch_research.return_value = _mock_api_response(
+            "TCS",
+            persistence_override={
+                "saved": True,
+                "is_cached": False,
+                "recommendation_id": "rec-1",
+                "snapshot_id": "snap-1",
+                "is_duplicate": False,
+                "track_record": {
+                    "status": "UNAVAILABLE",
+                    "note": "Historical track record temporarily unavailable due to database lookup error.",
+                },
+                "warning": None,
+            },
+        )
         mock_client_cls.return_value = mock_client
 
         result = execute_stock_research("TCS")
@@ -582,7 +549,10 @@ class TestSkillRun(unittest.TestCase):
         tr = result["track_record"]
         self.assertEqual(tr["status"], "UNAVAILABLE")
         self.assertIn("temporarily unavailable", tr["note"])
-        self.assertIn("Historical track record temporarily unavailable due to database lookup error", result["markdown_response"])
+        self.assertIn(
+            "Historical track record temporarily unavailable due to database lookup error",
+            result["markdown_response"],
+        )
 
     def test_track_record_dev_mode_indicates_bypass(self):
         """DEV mode bypasses Supabase and explicitly flags track record as UNAVAILABLE."""

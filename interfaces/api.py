@@ -43,8 +43,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from intelligence.investment_assessment import evaluate_investment_assessment
+from intelligence.track_record import calculate_track_record
 from interfaces.research_cli import normalize_symbol
 from services.research_pipeline import run_pipeline
+from services.supabase_repo import SupabaseRepository, SupabaseRepositoryError
 
 logger = logging.getLogger("stock_researcher_api")
 
@@ -264,7 +267,7 @@ async def health_check() -> Dict[str, Any]:
 
 
 async def _execute_research(raw_symbol: str) -> JSONResponse:
-    """Normalize input, execute pipeline in a worker thread, and format response."""
+    """Normalize input, check cache, execute pipeline in a worker thread, persist, and respond."""
     try:
         symbol = normalize_symbol(raw_symbol)
     except ValueError as exc:
@@ -297,12 +300,129 @@ async def _execute_research(raw_symbol: str) -> JSONResponse:
         )
 
     try:
-        # Offload the synchronous, long-running scraper/pipeline to threadpool
+        repo = SupabaseRepository()
+
+        # ------------------------------------------------------------------
+        # 1. 6-hour cache check: return stored result if still fresh
+        # ------------------------------------------------------------------
+        if repo.is_configured:
+            cached_rec, cached_snap = await run_in_threadpool(
+                repo.get_cached_assessment, symbol
+            )
+            if cached_rec is not None and cached_snap is not None:
+                baseline_rec = None
+                try:
+                    base_cand = await run_in_threadpool(repo.get_baseline_assessment, symbol)
+                    if isinstance(base_cand, dict):
+                        baseline_rec = base_cand
+                except SupabaseRepositoryError:
+                    baseline_rec = None
+                track_record = calculate_track_record(cached_rec, baseline_rec)
+                cached_rec["track_record"] = track_record
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK,
+                    content={
+                        **cached_snap,
+                        "_persistence": {
+                            "saved": True,
+                            "is_cached": True,
+                            "recommendation_id": cached_rec.get("id"),
+                            "snapshot_id": cached_snap.get("research_id"),
+                            "track_record": track_record,
+                        },
+                    },
+                )
+
+        # ------------------------------------------------------------------
+        # 2. Fresh pipeline run (offload blocking scraping to threadpool)
+        # ------------------------------------------------------------------
         result = await run_in_threadpool(run_pipeline, symbol)
+
+        # ------------------------------------------------------------------
+        # 3. Deterministic investment assessment
+        # ------------------------------------------------------------------
+        recommendation = evaluate_investment_assessment(result)
+
+        # ------------------------------------------------------------------
+        # 4. Retrieve baseline BEFORE saving (prevents self-comparison)
+        # ------------------------------------------------------------------
+        baseline_rec = None
+        baseline_lookup_failed = False
+        if repo.is_configured:
+            try:
+                base_cand = await run_in_threadpool(repo.get_baseline_assessment, symbol)
+                if isinstance(base_cand, dict):
+                    baseline_rec = base_cand
+            except SupabaseRepositoryError:
+                baseline_lookup_failed = True
+
+        if baseline_rec is not None:
+            track_record = calculate_track_record(recommendation, baseline_rec)
+        elif baseline_lookup_failed:
+            track_record = {
+                "status": "UNAVAILABLE",
+                "note": "Historical track record temporarily unavailable due to database lookup error.",
+            }
+        elif not repo.is_configured:
+            track_record = {
+                "status": "UNAVAILABLE",
+                "note": "Supabase not configured on server; historical track record unavailable.",
+            }
+        else:
+            track_record = calculate_track_record(recommendation, None)
+
+        recommendation["track_record"] = track_record
+
+        # ------------------------------------------------------------------
+        # 5. Append-only persistence to Supabase
+        # ------------------------------------------------------------------
+        persistence: Dict[str, Any] = {"saved": False, "is_cached": False, "warning": None}
+
+        if repo.is_configured:
+            snap_result = await run_in_threadpool(repo.save_research_snapshot, result)
+            if snap_result.get("saved") and snap_result.get("id"):
+                snapshot_id = snap_result["id"]
+                rec_result = await run_in_threadpool(
+                    repo.save_recommendation, recommendation, snapshot_id
+                )
+                if rec_result.get("saved"):
+                    recommendation["id"] = rec_result.get("id")
+                    persistence = {
+                        "saved": True,
+                        "is_cached": False,
+                        "recommendation_id": rec_result.get("id"),
+                        "snapshot_id": snapshot_id,
+                        "is_duplicate": rec_result.get("is_duplicate", False),
+                        "track_record": track_record,
+                    }
+                else:
+                    persistence = {
+                        "saved": False,
+                        "is_cached": False,
+                        "warning": rec_result.get("warning") or "Recommendation persistence failed.",
+                        "snapshot_id": snapshot_id,
+                        "track_record": track_record,
+                    }
+            else:
+                persistence = {
+                    "saved": False,
+                    "is_cached": False,
+                    "warning": snap_result.get("warning") or "Snapshot persistence failed.",
+                    "track_record": track_record,
+                }
+        else:
+            persistence = {
+                "saved": False,
+                "is_cached": False,
+                "warning": "Supabase not configured on server; persistence skipped.",
+                "track_record": track_record,
+            }
+
         return JSONResponse(
             status_code=status.HTTP_200_OK,
-            content=result,
+            content={**result, "_persistence": persistence},
         )
+
     except Exception as exc:
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

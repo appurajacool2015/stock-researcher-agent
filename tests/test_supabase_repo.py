@@ -151,6 +151,7 @@ class TestSupabaseRepository(unittest.TestCase):
         self.assertEqual(result["id"], "rec-uuid-existing")
         self.assertTrue(result["is_duplicate"])
 
+    @patch.dict("os.environ", {"SUPABASE_URL": "", "SUPABASE_SERVICE_ROLE_KEY": ""}, clear=False)
     def test_unconfigured_repository_graceful(self):
         """Unconfigured repo returns saved=False with warning and never crashes."""
         unconfigured_repo = SupabaseRepository(supabase_url="", supabase_key="")
