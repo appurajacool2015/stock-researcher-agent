@@ -159,6 +159,189 @@ def _is_financial_institution(company_name: str, fundamentals: Dict[str, Any]) -
     return any(keyword in full_text for keyword in financial_keywords)
 
 
+
+def _extract_metric_item(
+    container: Any,
+    key: str,
+    default_date: Optional[str] = None,
+) -> Tuple[Optional[float], str, str]:
+    """
+    Extract (value, status, as_of_date) safely from a datapoint envelope.
+    Preserves VERIFIED, DERIVED, STALE, CONFLICTING, UNAVAILABLE statuses faithfully.
+    """
+    if not isinstance(container, dict):
+        return None, "UNAVAILABLE", "—"
+    item = container.get(key)
+    if not isinstance(item, dict):
+        return None, "UNAVAILABLE", "—"
+
+    val = _number(item.get("value"))
+    status = str(item.get("status") or ("VERIFIED" if val is not None else "UNAVAILABLE"))
+
+    prov = item.get("provenance")
+    as_of = None
+    if isinstance(prov, dict):
+        as_of = prov.get("as_of_date")
+    if not as_of:
+        as_of = default_date or "—"
+
+    if val is None and status == "UNAVAILABLE":
+        return None, "UNAVAILABLE", "—"
+
+    return val, status, str(as_of)
+
+
+def build_key_metrics(research_result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Construct a deterministic list of 16 key financial, valuation, and volume metrics
+    conforming strictly to the 4-column specification: [Metric, Value, Status, As-Of Date].
+
+    Guards:
+    1. Never invent values or substitute zero for missing data.
+    2. Missing metrics explicitly labeled UNAVAILABLE with as-of date '—'.
+    3. Stale/conflicting statuses are faithfully preserved from pipeline facts.
+    4. Debt-to-Equity is marked 'N/A' (Status: 'N/A') for Banks / NBFCs.
+    5. PEG is explicitly UNAVAILABLE (Date: '—') pending future schema support.
+    6. Relative volume guards against zero/missing 20-day average volume.
+    7. OBV trend describes directional volume-flow without claiming institutional proof.
+    """
+    fundamentals = research_result.get("fundamentals") or {}
+    technicals = research_result.get("technicals") or {}
+    institutional = research_result.get("institutional") or {}
+    company_name = str(research_result.get("company_name") or "")
+
+    fund_date = fundamentals.get("provenance", {}).get("as_of_date") if isinstance(fundamentals, dict) else None
+    tech_date = technicals.get("provenance", {}).get("as_of_date") if isinstance(technicals, dict) else None
+    inst_date = institutional.get("provenance", {}).get("as_of_date") if isinstance(institutional, dict) else None
+
+    # 1. CMP
+    cmp_val, cmp_stat, cmp_dt = _extract_metric_item(technicals, "cmp", tech_date)
+    cmp_str = f"₹{cmp_val:,.2f}" if cmp_val is not None else "UNAVAILABLE"
+
+    # 2. P/E
+    pe_val, pe_stat, pe_dt = _extract_metric_item(fundamentals, "pe_ratio", fund_date)
+    pe_str = f"{pe_val:.2f}x" if pe_val is not None else "UNAVAILABLE"
+
+    # 3. ROCE
+    roce_val, roce_stat, roce_dt = _extract_metric_item(fundamentals, "roce", fund_date)
+    roce_str = f"{roce_val:.1f}%" if roce_val is not None else "UNAVAILABLE"
+
+    # 4. ROE
+    roe_val, roe_stat, roe_dt = _extract_metric_item(fundamentals, "roe", fund_date)
+    roe_str = f"{roe_val:.1f}%" if roe_val is not None else "UNAVAILABLE"
+
+    # 5. 3Y Sales Growth
+    sg_val, sg_stat, sg_dt = _extract_metric_item(fundamentals, "sales_growth_3y_cagr", fund_date)
+    if sg_val is None:
+        sg_val, sg_stat, sg_dt = _extract_metric_item(fundamentals, "sales_growth_3years_cagr", fund_date)
+    sg_str = f"{sg_val:.1f}%" if sg_val is not None else "UNAVAILABLE"
+
+    # 6. 3Y Profit Growth
+    pg_val, pg_stat, pg_dt = _extract_metric_item(fundamentals, "profit_growth_3y_cagr", fund_date)
+    if pg_val is None:
+        pg_val, pg_stat, pg_dt = _extract_metric_item(fundamentals, "profit_growth_3years_cagr", fund_date)
+    pg_str = f"{pg_val:.1f}%" if pg_val is not None else "UNAVAILABLE"
+
+    # 7. 50 DMA
+    dma50_val, dma50_stat, dma50_dt = _extract_metric_item(technicals, "dma_50", tech_date)
+    dma50_str = f"₹{dma50_val:,.2f}" if dma50_val is not None else "UNAVAILABLE"
+
+    # 8. 200 DMA
+    dma200_val, dma200_stat, dma200_dt = _extract_metric_item(technicals, "dma_200", tech_date)
+    dma200_str = f"₹{dma200_val:,.2f}" if dma200_val is not None else "UNAVAILABLE"
+
+    # 9. RSI (14)
+    rsi_val, rsi_stat, rsi_dt = _extract_metric_item(technicals, "rsi_14", tech_date)
+    rsi_str = f"{rsi_val:.1f}" if rsi_val is not None else "UNAVAILABLE"
+
+    # 10. Debt-to-Equity
+    is_fin = _is_financial_institution(company_name, fundamentals)
+    if is_fin:
+        de_str = "N/A"
+        de_stat = "N/A"
+        de_dt = "—"
+        de_val = None
+    else:
+        de_val, de_stat, de_dt = _extract_metric_item(fundamentals, "debt_to_equity", fund_date)
+        de_str = f"{de_val:.2f}" if de_val is not None else "UNAVAILABLE"
+
+    # 11. Promoter Pledge
+    pledge_val, pledge_stat, pledge_dt = _extract_metric_item(institutional, "promoter_pledge_pct", inst_date)
+    pledge_str = f"{pledge_val:.1f}%" if pledge_val is not None else "UNAVAILABLE"
+
+    # 12. PEG (Explicitly UNAVAILABLE until supported)
+    peg_str = "UNAVAILABLE"
+    peg_stat = "UNAVAILABLE"
+    peg_dt = "—"
+
+    # 13. Trading Volume (Latest completed session)
+    vol_val, vol_stat, vol_dt = _extract_metric_item(technicals, "volume", tech_date)
+    vol_str = f"{int(round(vol_val)):,}" if vol_val is not None else "UNAVAILABLE"
+
+    # 14. 20-Day Avg Volume
+    avg_vol_val, avg_vol_stat, avg_vol_dt = _extract_metric_item(technicals, "avg_volume_20", tech_date)
+    if avg_vol_val is None:
+        avg_vol_val, avg_vol_stat, avg_vol_dt = _extract_metric_item(technicals, "avg_volume_1m", tech_date)
+    avg_vol_str = f"{int(round(avg_vol_val)):,}" if avg_vol_val is not None else "UNAVAILABLE"
+
+    # 15. Relative Volume = latest session volume / 20-day average volume
+    pct_val, _, _ = _extract_metric_item(technicals, "volume_vs_20d_pct")
+    if pct_val is None:
+        pct_val, _, _ = _extract_metric_item(technicals, "volume_vs_1m_pct")
+
+    if vol_val is not None and avg_vol_val is not None and avg_vol_val > 0:
+        rel_ratio = vol_val / avg_vol_val
+        if pct_val is not None:
+            pct_sign = "+" if pct_val >= 0 else ""
+            rel_vol_str = f"{rel_ratio:.2f}x ({pct_sign}{pct_val:.1f}%)"
+        else:
+            pct_derived = ((rel_ratio - 1.0) * 100.0)
+            pct_sign = "+" if pct_derived >= 0 else ""
+            rel_vol_str = f"{rel_ratio:.2f}x ({pct_sign}{pct_derived:.1f}%)"
+        rel_vol_stat = "DERIVED"
+        rel_vol_dt = tech_date or "—"
+    else:
+        rel_vol_str = "UNAVAILABLE"
+        rel_vol_stat = "UNAVAILABLE"
+        rel_vol_dt = "—"
+        rel_ratio = None
+
+    # 16. OBV Trend (14d)
+    obv_val, _, obv_dt = _extract_metric_item(technicals, "obv_change_norm_14d", tech_date)
+    if obv_val is not None:
+        if obv_val >= 0.10:
+            obv_str = f"Positive (+{obv_val:.2f})"
+        elif obv_val >= -0.10:
+            sign = "+" if obv_val >= 0 else ""
+            obv_str = f"Neutral ({sign}{obv_val:.2f})"
+        else:
+            obv_str = f"Negative ({obv_val:.2f})"
+        obv_stat = "DERIVED"
+    else:
+        obv_str = "UNAVAILABLE"
+        obv_stat = "UNAVAILABLE"
+        obv_dt = "—"
+
+    return [
+        {"metric": "CMP", "value": cmp_str, "status": cmp_stat, "as_of_date": cmp_dt, "raw_value": cmp_val},
+        {"metric": "P/E", "value": pe_str, "status": pe_stat, "as_of_date": pe_dt, "raw_value": pe_val},
+        {"metric": "ROCE", "value": roce_str, "status": roce_stat, "as_of_date": roce_dt, "raw_value": roce_val},
+        {"metric": "ROE", "value": roe_str, "status": roe_stat, "as_of_date": roe_dt, "raw_value": roe_val},
+        {"metric": "3Y Sales Growth", "value": sg_str, "status": sg_stat, "as_of_date": sg_dt, "raw_value": sg_val},
+        {"metric": "3Y Profit Growth", "value": pg_str, "status": pg_stat, "as_of_date": pg_dt, "raw_value": pg_val},
+        {"metric": "50 DMA", "value": dma50_str, "status": dma50_stat, "as_of_date": dma50_dt, "raw_value": dma50_val},
+        {"metric": "200 DMA", "value": dma200_str, "status": dma200_stat, "as_of_date": dma200_dt, "raw_value": dma200_val},
+        {"metric": "RSI (14)", "value": rsi_str, "status": rsi_stat, "as_of_date": rsi_dt, "raw_value": rsi_val},
+        {"metric": "Debt-to-Equity", "value": de_str, "status": de_stat, "as_of_date": de_dt, "raw_value": de_val},
+        {"metric": "Promoter Pledge", "value": pledge_str, "status": pledge_stat, "as_of_date": pledge_dt, "raw_value": pledge_val},
+        {"metric": "PEG", "value": peg_str, "status": peg_stat, "as_of_date": peg_dt, "raw_value": None},
+        {"metric": "Trading Volume (Latest)", "value": vol_str, "status": vol_stat, "as_of_date": vol_dt, "raw_value": vol_val},
+        {"metric": "20-Day Avg Volume", "value": avg_vol_str, "status": avg_vol_stat, "as_of_date": avg_vol_dt, "raw_value": avg_vol_val},
+        {"metric": "Relative Volume", "value": rel_vol_str, "status": rel_vol_stat, "as_of_date": rel_vol_dt, "raw_value": rel_ratio},
+        {"metric": "OBV Trend (14d)", "value": obv_str, "status": obv_stat, "as_of_date": obv_dt, "raw_value": obv_val},
+    ]
+
+
 # ==============================================================================
 # DETERMINISTIC ASSESSMENT ENGINE
 # ==============================================================================
@@ -243,6 +426,7 @@ def evaluate_investment_assessment(
 
     # Evaluate deterministic buying zone entry setup
     buying_zone_eval = evaluate_buying_zone(research_result)
+    key_metrics_data = build_key_metrics(research_result)
 
     # --------------------------------------------------------------------------
     # DATA QUALITY & LIMITATIONS AUDIT
@@ -413,6 +597,7 @@ def evaluate_investment_assessment(
             now_utc=now_utc,
             research_run_id=research_result.get("research_id"),
             buying_zone=buying_zone_eval,
+            key_metrics=key_metrics_data,
         )
 
     # --------------------------------------------------------------------------
@@ -473,6 +658,7 @@ def evaluate_investment_assessment(
             now_utc=now_utc,
             research_run_id=research_result.get("research_id"),
             buying_zone=buying_zone_eval,
+            key_metrics=key_metrics_data,
         )
 
     # --------------------------------------------------------------------------
@@ -541,6 +727,7 @@ def evaluate_investment_assessment(
             now_utc=now_utc,
             research_run_id=research_result.get("research_id"),
             buying_zone=buying_zone_eval,
+            key_metrics=key_metrics_data,
         )
 
     # --------------------------------------------------------------------------
@@ -642,6 +829,7 @@ def evaluate_investment_assessment(
             now_utc=now_utc,
             research_run_id=research_result.get("research_id"),
             buying_zone=buying_zone_eval,
+            key_metrics=key_metrics_data,
         )
     else:
         # If technical is BUY_CANDIDATE but failed fundamental/valuation checks:
@@ -681,6 +869,7 @@ def evaluate_investment_assessment(
         now_utc=now_utc,
         research_run_id=research_result.get("research_id"),
         buying_zone=buying_zone_eval,
+        key_metrics=key_metrics_data,
     )
 
 
@@ -704,6 +893,7 @@ def _build_recommendation_dict(
     now_utc: str,
     research_run_id: Optional[str],
     buying_zone: Optional[Dict[str, Any]] = None,
+    key_metrics: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Helper to assemble a clean, consistent recommendation dictionary."""
     return {
@@ -728,6 +918,7 @@ def _build_recommendation_dict(
         "limitations": list(dict.fromkeys(limitations)),
         "research_run_id": research_run_id,
         "buying_zone": buying_zone,
+        "key_metrics": key_metrics or [],
         "is_cached": False,
         "cache_metadata": {},
     }

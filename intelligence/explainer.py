@@ -30,6 +30,35 @@ DISCLAIMER_TEXT = (
 )
 
 
+
+def _format_default_key_metrics(rec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Generate default key metrics with safe UNAVAILABLE fallbacks when detailed metrics are omitted."""
+    cmp_val = rec.get("cmp")
+    cmp_str = f"₹{cmp_val:,.2f}" if isinstance(cmp_val, (int, float)) and cmp_val is not None else "UNAVAILABLE"
+    cmp_status = "VERIFIED" if cmp_val is not None else "UNAVAILABLE"
+    as_of = rec.get("market_data_as_of") or "—"
+    cmp_date = as_of if cmp_val is not None else "—"
+
+    return [
+        {"metric": "CMP", "value": cmp_str, "status": cmp_status, "as_of_date": cmp_date},
+        {"metric": "P/E", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+        {"metric": "ROCE", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+        {"metric": "ROE", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+        {"metric": "3Y Sales Growth", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+        {"metric": "3Y Profit Growth", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+        {"metric": "50 DMA", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+        {"metric": "200 DMA", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+        {"metric": "RSI (14)", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+        {"metric": "Debt-to-Equity", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+        {"metric": "Promoter Pledge", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+        {"metric": "PEG", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+        {"metric": "Trading Volume (Latest)", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+        {"metric": "20-Day Avg Volume", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+        {"metric": "Relative Volume", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+        {"metric": "OBV Trend (14d)", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+    ]
+
+
 def format_deterministic_template(
     rec: Dict[str, Any],
     track_record: Optional[Dict[str, Any]] = None,
@@ -145,6 +174,24 @@ def format_deterministic_template(
             lines.append("- Conflicting / Cautionary signals:")
             for c in conf_signals[:3]:
                 lines.append(f"  • {c}")
+
+    # Key Metrics Block (16 metrics, 4-column table)
+    km = rec.get("key_metrics")
+    if km is None or not isinstance(km, list) or len(km) == 0:
+        km = _format_default_key_metrics(rec)
+
+    lines.extend([
+        "",
+        "**Key metrics:**",
+        "| Metric | Value | Status | As-Of Date |",
+        "| :--- | :--- | :--- | :--- |",
+    ])
+    for row in km:
+        m_name = row.get("metric", row.get("name", "UNKNOWN"))
+        m_val = row.get("value", row.get("value_formatted", "UNAVAILABLE"))
+        m_stat = row.get("status", "UNAVAILABLE")
+        m_date = row.get("as_of_date", "—")
+        lines.append(f"| {m_name} | {m_val} | {m_stat} | {m_date} |")
 
     lines.extend([
         "",

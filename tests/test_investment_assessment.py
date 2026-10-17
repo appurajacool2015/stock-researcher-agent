@@ -308,5 +308,150 @@ class TestInvestmentAssessment(unittest.TestCase):
         self.assertLessEqual(rec["investment_confidence"], 1.0)
 
 
+    # --------------------------------------------------------------------------
+    # Key Metrics Table Tests
+    # --------------------------------------------------------------------------
+
+    def test_build_key_metrics_complete_data(self):
+        """build_key_metrics produces 16 formatted metrics with accurate statuses and dates."""
+        data = _base_mock_result("TCS")
+        data["technicals"]["volume"] = {
+            "value": 1000000.0,
+            "unit": "SHARES",
+            "status": "VERIFIED",
+            "provenance": {"as_of_date": "2026-10-10"},
+        }
+        data["technicals"]["avg_volume_20"] = {
+            "value": 500000.0,
+            "unit": "SHARES",
+            "status": "VERIFIED",
+            "provenance": {"as_of_date": "2026-10-10"},
+        }
+        data["technicals"]["volume_vs_20d_pct"] = {
+            "value": 100.0,
+            "unit": "PERCENT",
+            "status": "DERIVED",
+            "provenance": {"as_of_date": "2026-10-10"},
+        }
+        data["technicals"]["obv_change_norm_14d"] = {
+            "value": 0.15,
+            "unit": "RATIO",
+            "status": "DERIVED",
+            "provenance": {"as_of_date": "2026-10-10"},
+        }
+
+        rec = evaluate_investment_assessment(data)
+        self.assertIn("key_metrics", rec)
+        km = rec["key_metrics"]
+        self.assertEqual(len(km), 16)
+
+        km_dict = {item["metric"]: item for item in km}
+        self.assertEqual(km_dict["CMP"]["value"], "₹104.00")
+        self.assertEqual(km_dict["CMP"]["status"], "VERIFIED")
+        self.assertEqual(km_dict["P/E"]["value"], "28.00x")
+        self.assertEqual(km_dict["ROCE"]["value"], "30.0%")
+        self.assertEqual(km_dict["ROE"]["value"], "25.0%")
+        self.assertEqual(km_dict["3Y Sales Growth"]["value"], "12.0%")
+        self.assertEqual(km_dict["3Y Profit Growth"]["value"], "15.0%")
+        self.assertEqual(km_dict["50 DMA"]["value"], "₹100.00")
+        self.assertEqual(km_dict["200 DMA"]["value"], "₹90.00")
+        self.assertEqual(km_dict["RSI (14)"]["value"], "58.0")
+        self.assertEqual(km_dict["Debt-to-Equity"]["value"], "0.10")
+        self.assertEqual(km_dict["Promoter Pledge"]["value"], "0.0%")
+        self.assertEqual(km_dict["PEG"]["value"], "UNAVAILABLE")
+        self.assertEqual(km_dict["PEG"]["status"], "UNAVAILABLE")
+        self.assertEqual(km_dict["Trading Volume (Latest)"]["value"], "1,000,000")
+        self.assertEqual(km_dict["20-Day Avg Volume"]["value"], "500,000")
+        self.assertEqual(km_dict["Relative Volume"]["value"], "2.00x (+100.0%)")
+        self.assertEqual(km_dict["Relative Volume"]["status"], "DERIVED")
+        self.assertEqual(km_dict["OBV Trend (14d)"]["value"], "Positive (+0.15)")
+        self.assertEqual(km_dict["OBV Trend (14d)"]["status"], "DERIVED")
+
+    def test_build_key_metrics_bank_nbfc_debt_to_equity_na(self):
+        """Financial institutions display Debt-to-Equity as N/A with status N/A."""
+        data = _base_mock_result("HDFCBANK")
+        data["company_name"] = "HDFC Bank Ltd"
+        data["fundamentals"]["sector"] = "Financial Services"
+        data["fundamentals"]["industry"] = "Private Sector Bank"
+
+        rec = evaluate_investment_assessment(data)
+        km_dict = {item["metric"]: item for item in rec["key_metrics"]}
+        self.assertEqual(km_dict["Debt-to-Equity"]["value"], "N/A")
+        self.assertEqual(km_dict["Debt-to-Equity"]["status"], "N/A")
+        self.assertEqual(km_dict["Debt-to-Equity"]["as_of_date"], "—")
+
+    def test_build_key_metrics_missing_data_never_zero(self):
+        """Missing metrics are explicitly UNAVAILABLE and never converted to zero."""
+        data = _base_mock_result("MISSING_DATA")
+        data["fundamentals"]["pe_ratio"] = {"value": None, "status": "UNAVAILABLE"}
+        data["fundamentals"]["debt_to_equity"] = {"value": None, "status": "UNAVAILABLE"}
+        data["technicals"]["rsi_14"] = {"value": None, "status": "UNAVAILABLE"}
+        data["institutional"]["promoter_pledge_pct"] = {"value": None, "status": "UNAVAILABLE"}
+
+        rec = evaluate_investment_assessment(data)
+        km_dict = {item["metric"]: item for item in rec["key_metrics"]}
+        self.assertEqual(km_dict["P/E"]["value"], "UNAVAILABLE")
+        self.assertEqual(km_dict["P/E"]["status"], "UNAVAILABLE")
+        self.assertNotEqual(km_dict["P/E"]["value"], "0.00x")
+        self.assertEqual(km_dict["Debt-to-Equity"]["value"], "UNAVAILABLE")
+        self.assertEqual(km_dict["RSI (14)"]["value"], "UNAVAILABLE")
+        self.assertEqual(km_dict["Promoter Pledge"]["value"], "UNAVAILABLE")
+
+    def test_build_key_metrics_zero_average_volume_guard(self):
+        """Zero or missing average volume guards against division-by-zero in Relative Volume."""
+        data = _base_mock_result("ZERO_VOL")
+        data["technicals"]["volume"] = {"value": 100000.0, "status": "VERIFIED"}
+        data["technicals"]["avg_volume_20"] = {"value": 0.0, "status": "VERIFIED"}
+
+        rec = evaluate_investment_assessment(data)
+        km_dict = {item["metric"]: item for item in rec["key_metrics"]}
+        self.assertEqual(km_dict["Relative Volume"]["value"], "UNAVAILABLE")
+        self.assertEqual(km_dict["Relative Volume"]["status"], "UNAVAILABLE")
+
+    def test_build_key_metrics_stale_and_conflicting_preserved(self):
+        """Stale and Conflicting statuses are faithfully preserved in key_metrics."""
+        data = _base_mock_result("STALE_CONF")
+        data["fundamentals"]["pe_ratio"] = {
+            "value": 24.5,
+            "status": "STALE",
+            "provenance": {"as_of_date": "2024-03-31"},
+        }
+        data["fundamentals"]["roe"] = {
+            "value": None,
+            "status": "CONFLICTING",
+            "provenance": {"as_of_date": "2026-03-31"},
+        }
+
+        rec = evaluate_investment_assessment(data)
+        km_dict = {item["metric"]: item for item in rec["key_metrics"]}
+        self.assertEqual(km_dict["P/E"]["value"], "24.50x")
+        self.assertEqual(km_dict["P/E"]["status"], "STALE")
+        self.assertEqual(km_dict["P/E"]["as_of_date"], "2024-03-31")
+        self.assertEqual(km_dict["ROE"]["value"], "UNAVAILABLE")
+        self.assertEqual(km_dict["ROE"]["status"], "CONFLICTING")
+
+    def test_build_key_metrics_obv_trend_categories(self):
+        """OBV trend categories: Positive, Neutral, Negative, and Missing."""
+        data = _base_mock_result("OBV_TEST")
+
+        # Positive
+        data["technicals"]["obv_change_norm_14d"] = {"value": 0.22, "status": "DERIVED", "provenance": {"as_of_date": "2026-10-10"}}
+        rec_pos = evaluate_investment_assessment(data)
+        km_pos = {item["metric"]: item for item in rec_pos["key_metrics"]}
+        self.assertEqual(km_pos["OBV Trend (14d)"]["value"], "Positive (+0.22)")
+
+        # Neutral
+        data["technicals"]["obv_change_norm_14d"]["value"] = -0.05
+        rec_neu = evaluate_investment_assessment(data)
+        km_neu = {item["metric"]: item for item in rec_neu["key_metrics"]}
+        self.assertEqual(km_neu["OBV Trend (14d)"]["value"], "Neutral (-0.05)")
+
+        # Negative
+        data["technicals"]["obv_change_norm_14d"]["value"] = -0.28
+        rec_neg = evaluate_investment_assessment(data)
+        km_neg = {item["metric"]: item for item in rec_neg["key_metrics"]}
+        self.assertEqual(km_neg["OBV Trend (14d)"]["value"], "Negative (-0.28)")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

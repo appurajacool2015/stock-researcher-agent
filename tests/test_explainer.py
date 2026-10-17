@@ -238,6 +238,61 @@ class TestExplainer(unittest.TestCase):
         output = explain_assessment(rec, use_gemini=False)
         self.assertIn("Research Baseline: Initial baseline established today", output)
 
+    # --------------------------------------------------------------------------
+    # Key Metrics Presentation Table Tests
+    # --------------------------------------------------------------------------
+
+    def test_key_metrics_table_rendered_with_defaults(self):
+        """When key_metrics is omitted, fallback table renders CMP and UNAVAILABLE defaults."""
+        rec = _sample_recommendation()
+        output = format_deterministic_template(rec)
+
+        self.assertIn("**Key metrics:**", output)
+        self.assertIn("| Metric | Value | Status | As-Of Date |", output)
+        self.assertIn("| CMP | ₹3,500.00 | VERIFIED | 2026-10-10 |", output)
+        self.assertIn("| PEG | UNAVAILABLE | UNAVAILABLE | — |", output)
+        self.assertIn("| 50 DMA | UNAVAILABLE | UNAVAILABLE | — |", output)
+
+    def test_key_metrics_table_with_complete_data(self):
+        """Renders all 16 metrics faithfully with verified formats, statuses, and dates."""
+        rec = _sample_recommendation()
+        rec["key_metrics"] = [
+            {"metric": "CMP", "value": "₹3,500.00", "status": "VERIFIED", "as_of_date": "2026-10-10"},
+            {"metric": "P/E", "value": "28.50x", "status": "VERIFIED", "as_of_date": "2026-03-31"},
+            {"metric": "ROCE", "value": "55.2%", "status": "VERIFIED", "as_of_date": "2026-03-31"},
+            {"metric": "ROE", "value": "48.2%", "status": "VERIFIED", "as_of_date": "2026-03-31"},
+            {"metric": "3Y Sales Growth", "value": "11.4%", "status": "VERIFIED", "as_of_date": "2026-03-31"},
+            {"metric": "3Y Profit Growth", "value": "12.8%", "status": "VERIFIED", "as_of_date": "2026-03-31"},
+            {"metric": "50 DMA", "value": "₹3,420.50", "status": "VERIFIED", "as_of_date": "2026-10-10"},
+            {"metric": "200 DMA", "value": "₹3,210.00", "status": "VERIFIED", "as_of_date": "2026-10-10"},
+            {"metric": "RSI (14)", "value": "58.4", "status": "VERIFIED", "as_of_date": "2026-10-10"},
+            {"metric": "Debt-to-Equity", "value": "0.08", "status": "VERIFIED", "as_of_date": "2026-03-31"},
+            {"metric": "Promoter Pledge", "value": "0.0%", "status": "VERIFIED", "as_of_date": "2026-06-30"},
+            {"metric": "PEG", "value": "UNAVAILABLE", "status": "UNAVAILABLE", "as_of_date": "—"},
+            {"metric": "Trading Volume (Latest)", "value": "2,450,100", "status": "VERIFIED", "as_of_date": "2026-10-10"},
+            {"metric": "20-Day Avg Volume", "value": "1,850,000", "status": "VERIFIED", "as_of_date": "2026-10-10"},
+            {"metric": "Relative Volume", "value": "1.32x (+32.4%)", "status": "DERIVED", "as_of_date": "2026-10-10"},
+            {"metric": "OBV Trend (14d)", "value": "Positive (+0.25)", "status": "DERIVED", "as_of_date": "2026-10-10"},
+        ]
+
+        output = format_deterministic_template(rec)
+        self.assertIn("| CMP | ₹3,500.00 | VERIFIED | 2026-10-10 |", output)
+        self.assertIn("| P/E | 28.50x | VERIFIED | 2026-03-31 |", output)
+        self.assertIn("| ROCE | 55.2% | VERIFIED | 2026-03-31 |", output)
+        self.assertIn("| ROE | 48.2% | VERIFIED | 2026-03-31 |", output)
+        self.assertIn("| 3Y Sales Growth | 11.4% | VERIFIED | 2026-03-31 |", output)
+        self.assertIn("| 3Y Profit Growth | 12.8% | VERIFIED | 2026-03-31 |", output)
+        self.assertIn("| 50 DMA | ₹3,420.50 | VERIFIED | 2026-10-10 |", output)
+        self.assertIn("| 200 DMA | ₹3,210.00 | VERIFIED | 2026-10-10 |", output)
+        self.assertIn("| RSI (14) | 58.4 | VERIFIED | 2026-10-10 |", output)
+        self.assertIn("| Debt-to-Equity | 0.08 | VERIFIED | 2026-03-31 |", output)
+        self.assertIn("| Promoter Pledge | 0.0% | VERIFIED | 2026-06-30 |", output)
+        self.assertIn("| PEG | UNAVAILABLE | UNAVAILABLE | — |", output)
+        self.assertIn("| Trading Volume (Latest) | 2,450,100 | VERIFIED | 2026-10-10 |", output)
+        self.assertIn("| 20-Day Avg Volume | 1,850,000 | VERIFIED | 2026-10-10 |", output)
+        self.assertIn("| Relative Volume | 1.32x (+32.4%) | DERIVED | 2026-10-10 |", output)
+        self.assertIn("| OBV Trend (14d) | Positive (+0.25) | DERIVED | 2026-10-10 |", output)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
