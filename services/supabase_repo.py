@@ -347,14 +347,14 @@ class SupabaseRepository:
                 "saved": False,
                 "id": None,
                 "error": f"HTTP {resp.status_code}: {resp.text}",
-                "warning": "Assessment generated successfully but snapshot persistence failed.",
+                "warning": f"Assessment generated successfully but snapshot persistence failed: HTTP {resp.status_code} ({resp.text[:120]}).",
             }
         except Exception as exc:
             return {
                 "saved": False,
                 "id": None,
                 "error": str(exc),
-                "warning": "Assessment generated successfully but snapshot persistence failed due to network error.",
+                "warning": f"Assessment generated successfully but snapshot persistence failed: {type(exc).__name__} ({str(exc)}).",
             }
 
     def save_recommendation(
@@ -446,12 +446,12 @@ class SupabaseRepository:
                 "saved": False,
                 "id": None,
                 "error": f"HTTP {resp.status_code}: {resp.text}",
-                "warning": "Assessment generated successfully but recommendation persistence failed.",
+                "warning": f"Assessment generated successfully but recommendation persistence failed: HTTP {resp.status_code} ({resp.text[:120]}).",
             }
         except Exception as exc:
             return {
                 "saved": False,
                 "id": None,
                 "error": str(exc),
-                "warning": "Assessment generated successfully but recommendation persistence failed due to network error.",
+                "warning": f"Assessment generated successfully but recommendation persistence failed: {type(exc).__name__} ({str(exc)}).",
             }

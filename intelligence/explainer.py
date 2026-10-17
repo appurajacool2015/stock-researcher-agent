@@ -114,9 +114,21 @@ def format_deterministic_template(
     key_levels = rec.get("key_levels", {})
     supp_info = key_levels.get("support_reference")
     res_info = key_levels.get("resistance_reference")
+    bz = rec.get("buying_zone") or {}
 
-    supp_str = f"₹{supp_info['price']:,.2f} ({supp_info['level_type']})" if supp_info and supp_info.get("price") else "UNAVAILABLE"
-    res_str = f"₹{res_info['price']:,.2f} ({res_info['level_type']})" if res_info and res_info.get("price") else "UNAVAILABLE"
+    if supp_info and supp_info.get("price"):
+        supp_str = f"₹{supp_info['price']:,.2f} ({supp_info['level_type']})"
+    elif bz.get("support_reference"):
+        supp_str = f"₹{bz['support_reference']:,.2f} ({bz.get('support_type', 'Support Reference')})"
+    else:
+        supp_str = "UNAVAILABLE"
+
+    if res_info and res_info.get("price"):
+        res_str = f"₹{res_info['price']:,.2f} ({res_info['level_type']})"
+    elif bz.get("resistance_reference"):
+        res_str = f"₹{bz['resistance_reference']:,.2f} ({bz.get('resistance_type', 'Resistance Reference')})"
+    else:
+        res_str = "UNAVAILABLE"
 
     # 4. Timestamps & Cache
     assessment_ts = rec.get("assessment_timestamp", "UNAVAILABLE")

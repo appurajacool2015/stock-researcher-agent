@@ -428,6 +428,20 @@ def evaluate_investment_assessment(
     buying_zone_eval = evaluate_buying_zone(research_result)
     key_metrics_data = build_key_metrics(research_result)
 
+    # Synchronize key_levels with buying zone references if technical key_levels are absent
+    key_levels = dict(key_levels)
+    if buying_zone_eval:
+        if (not key_levels.get("support_reference") or not key_levels["support_reference"].get("price")) and buying_zone_eval.get("support_reference"):
+            key_levels["support_reference"] = {
+                "price": buying_zone_eval["support_reference"],
+                "level_type": buying_zone_eval.get("support_type", "Support Reference"),
+            }
+        if (not key_levels.get("resistance_reference") or not key_levels["resistance_reference"].get("price")) and buying_zone_eval.get("resistance_reference"):
+            key_levels["resistance_reference"] = {
+                "price": buying_zone_eval["resistance_reference"],
+                "level_type": buying_zone_eval.get("resistance_type", "Resistance Reference"),
+            }
+
     # --------------------------------------------------------------------------
     # DATA QUALITY & LIMITATIONS AUDIT
     # --------------------------------------------------------------------------
