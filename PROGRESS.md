@@ -42,6 +42,7 @@ Deterministic stock research and rule-based investment assessment engine for Ind
 - **2026-10-17:** Completed Phase 1 by moving Supabase persistence and caching behind Render API (`85cac7c`). Client runners now require zero database credentials.
 - **2026-10-17:** Implemented deterministic Buying Zone Assessment (`intelligence/buying_zone.py`) with 5 mutually exclusive labels and risk-to-reward calculation (`5f0c886`).
 - **2026-10-17:** Implemented 16-row 4-column Key Metrics presentation table with volume metrics and status preservation (`eda17f5`).
+- **2026-10-17:** Documented Buying Zone, 16-row Key Metrics, decoupled Oracle VM architecture, and Supabase RLS resolution in README.md and Master Manual v3.0 (`36bfa7e`).
 
 ## 5. Risks and Open Issues
 - **Single-Source Failure Crash:** If Screener.in or Yahoo Finance blocks requests, the pipeline raises an unhandled exception instead of outputting partial evidence.
