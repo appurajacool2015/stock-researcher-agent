@@ -652,6 +652,7 @@ class ScreenerAdapter:
     def extract_shareholding(
         self,
         tables,
+        soup: Optional[BeautifulSoup] = None,
     ) -> Dict[str, Optional[float]]:
         """
         Extract latest and previous-quarter
@@ -832,6 +833,22 @@ class ScreenerAdapter:
                 "promoter_pledge"
             ] is not None:
                 break
+
+        # Check top snapshot card if not found in tables
+        if result["promoter_pledge"] is None and soup is not None:
+            for snapshot_pledge_name in [
+                "Pledged percentage",
+                "Promoter pledge",
+                "Pledged %",
+                "Promoter Pledge %",
+            ]:
+                val = self.find_snapshot_metric(
+                    soup,
+                    snapshot_pledge_name,
+                )
+                if val is not None:
+                    result["promoter_pledge"] = val
+                    break
 
         return result
 
@@ -1186,6 +1203,31 @@ class ScreenerAdapter:
             if debt_to_equity is not None:
                 break
 
+        # Fallback to Balance Sheet table if not in top snapshot card
+        if debt_to_equity is None:
+            borrowings = self.find_metric(tables, "Borrowings")
+            if borrowings is None:
+                borrowings = self.find_metric(tables, "Total Borrowings")
+
+            if borrowings is not None:
+                if borrowings == 0:
+                    debt_to_equity = 0.0
+                else:
+                    equity_cap = self.find_metric(tables, "Equity Capital")
+                    if equity_cap is None:
+                        equity_cap = self.find_metric(tables, "Share Capital")
+                    if equity_cap is None:
+                        equity_cap = self.find_metric(tables, "Equity Share Capital")
+
+                    reserves = self.find_metric(tables, "Reserves")
+                    if reserves is None:
+                        reserves = self.find_metric(tables, "Total Reserves")
+
+                    if equity_cap is not None and reserves is not None:
+                        total_equity = equity_cap + reserves
+                        if total_equity > 0:
+                            debt_to_equity = round(borrowings / total_equity, 2)
+
         # -----------------------------------------------------
         # Growth
         # -----------------------------------------------------
@@ -1269,7 +1311,8 @@ class ScreenerAdapter:
 
         institutional = (
             self.extract_shareholding(
-                tables
+                tables,
+                soup=soup,
             )
         )
 

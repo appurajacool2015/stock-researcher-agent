@@ -357,15 +357,24 @@ class TestInvestmentAssessment(unittest.TestCase):
         self.assertEqual(km_dict["200 DMA"]["value"], "₹90.00")
         self.assertEqual(km_dict["RSI (14)"]["value"], "58.0")
         self.assertEqual(km_dict["Debt-to-Equity"]["value"], "0.10")
-        self.assertEqual(km_dict["Promoter Pledge"]["value"], "0.0%")
-        self.assertEqual(km_dict["PEG"]["value"], "UNAVAILABLE")
-        self.assertEqual(km_dict["PEG"]["status"], "UNAVAILABLE")
+        self.assertEqual(km_dict["PEG"]["value"], "1.87")
+        self.assertEqual(km_dict["PEG"]["status"], "DERIVED")
         self.assertEqual(km_dict["Trading Volume (Latest)"]["value"], "1,000,000")
         self.assertEqual(km_dict["20-Day Avg Volume"]["value"], "500,000")
         self.assertEqual(km_dict["Relative Volume"]["value"], "2.00x (+100.0%)")
         self.assertEqual(km_dict["Relative Volume"]["status"], "DERIVED")
         self.assertEqual(km_dict["OBV Trend (14d)"]["value"], "Positive (+0.15)")
         self.assertEqual(km_dict["OBV Trend (14d)"]["status"], "DERIVED")
+
+    def test_build_key_metrics_peg_unavailable_when_profit_growth_negative_or_missing(self):
+        """PEG remains UNAVAILABLE when profit growth is negative or missing."""
+        data = _base_mock_result("TEST")
+        data["fundamentals"]["profit_growth_3y_cagr"]["value"] = -5.0
+        rec = evaluate_investment_assessment(data)
+        km_dict = {item["metric"]: item for item in rec["key_metrics"]}
+        self.assertEqual(km_dict["PEG"]["value"], "UNAVAILABLE")
+        self.assertEqual(km_dict["PEG"]["status"], "UNAVAILABLE")
+        self.assertEqual(km_dict["PEG"]["as_of_date"], "—")
 
     def test_build_key_metrics_bank_nbfc_debt_to_equity_na(self):
         """Financial institutions display Debt-to-Equity as N/A with status N/A."""

@@ -269,10 +269,16 @@ def build_key_metrics(research_result: Dict[str, Any]) -> List[Dict[str, Any]]:
     pledge_val, pledge_stat, pledge_dt = _extract_metric_item(institutional, "promoter_pledge_pct", inst_date)
     pledge_str = f"{pledge_val:.1f}%" if pledge_val is not None else "UNAVAILABLE"
 
-    # 12. PEG (Explicitly UNAVAILABLE until supported)
-    peg_str = "UNAVAILABLE"
-    peg_stat = "UNAVAILABLE"
-    peg_dt = "—"
+    # 12. PEG: P/E divided by 3-Year Profit Growth CAGR
+    if pe_val is not None and pg_val is not None and pg_val > 0 and pe_val > 0:
+        peg_calculated = round(pe_val / pg_val, 2)
+        peg_str = f"{peg_calculated:.2f}"
+        peg_stat = "DERIVED"
+        peg_dt = fund_date
+    else:
+        peg_str = "UNAVAILABLE"
+        peg_stat = "UNAVAILABLE"
+        peg_dt = "—"
 
     # 13. Trading Volume (Latest completed session)
     vol_val, vol_stat, vol_dt = _extract_metric_item(technicals, "volume", tech_date)

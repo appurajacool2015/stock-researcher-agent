@@ -17,8 +17,8 @@ Deterministic stock research and rule-based investment assessment engine for Ind
 ### Implemented & Unit-Tested Locally
 - **Server-Side Persistence (Phase 1):** Moved 6-hour cache checks and Supabase writes into Render API (`interfaces/api.py`). Client runner requires zero database keys.
 - **Buying Zone Assessment (Phase 1):** Deterministic 5-label entry evaluator (`intelligence/buying_zone.py`) computing invalidation levels, targets, and reward-to-risk ratios.
-- **Key Metrics Table:** 16-row, 4-column presentation table (`Metric`, `Value`, `Status`, `As-Of Date`) with volume indicators, division-by-zero guards, and bank/NBFC `N/A` handling.
-- **Unit Test Suite:** **228 tests passing locally** with `git diff --check` clean.
+- **Key Metrics & Fundamentals Enhancement:** Added Balance Sheet fallback in `adapters/screener.py` for Debt-to-Equity (borrowings/equity calculation and 0.00x zero-debt resolution) and deterministic PEG calculation in `intelligence/investment_assessment.py`.
+- **Unit Test Suite:** **237 tests passing locally** with `git diff --check` clean.
 
 ### Deployed & Live-Verified
 - **Render Live Security & Persistence Deployment:** Deployed commit `5f0c886` on Render. Verified:
@@ -43,6 +43,7 @@ Deterministic stock research and rule-based investment assessment engine for Ind
 - **2026-10-17:** Implemented deterministic Buying Zone Assessment (`intelligence/buying_zone.py`) with 5 mutually exclusive labels and risk-to-reward calculation (`5f0c886`).
 - **2026-10-17:** Implemented 16-row 4-column Key Metrics presentation table with volume metrics and status preservation (`eda17f5`).
 - **2026-10-17:** Documented Buying Zone, 16-row Key Metrics, decoupled Oracle VM architecture, and Supabase RLS resolution in README.md and Master Manual v3.0 (`36bfa7e`).
+- **2026-10-17:** Implemented Balance Sheet fallback for Debt-to-Equity (0.10x for TCS) and deterministic PEG ratio (2.04 for TCS) in Key Metrics table; added dedicated `test_screener.py` (237 tests).
 
 ## 5. Risks and Open Issues
 - **Single-Source Failure Crash:** If Screener.in or Yahoo Finance blocks requests, the pipeline raises an unhandled exception instead of outputting partial evidence.
