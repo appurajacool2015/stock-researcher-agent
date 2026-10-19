@@ -40,12 +40,21 @@ class ScreenerAdapter:
 
     HEADERS = {
         "User-Agent": (
-            "Mozilla/5.0 "
-            "(X11; Linux x86_64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/120.0 Safari/537.36"
-        )
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
     }
 
     TIMEOUT = 30
@@ -59,6 +68,20 @@ class ScreenerAdapter:
         self.session.headers.update(
             self.HEADERS
         )
+        try:
+            from requests.adapters import HTTPAdapter
+            from urllib3.util import Retry
+            retries = Retry(
+                total=3,
+                backoff_factor=1.0,
+                status_forcelist=[429, 500, 502, 503, 504],
+                raise_on_status=False,
+            )
+            adapter = HTTPAdapter(max_retries=retries)
+            self.session.mount("https://", adapter)
+            self.session.mount("http://", adapter)
+        except Exception:
+            pass
 
     # =========================================================
     # TIME
@@ -209,12 +232,20 @@ class ScreenerAdapter:
             symbol=symbol
         )
 
-        response = self.session.get(
-            url,
-            timeout=self.TIMEOUT,
-        )
-
-        response.raise_for_status()
+        try:
+            response = self.session.get(
+                url,
+                timeout=self.TIMEOUT,
+            )
+            response.raise_for_status()
+        except requests.RequestException:
+            # Fallback to standalone company URL if consolidated fails
+            standalone_url = f"https://www.screener.in/company/{symbol}/"
+            response = self.session.get(
+                standalone_url,
+                timeout=self.TIMEOUT,
+            )
+            response.raise_for_status()
 
         if not response.text:
             raise RuntimeError(

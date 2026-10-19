@@ -133,5 +133,18 @@ class TestResearchClient(unittest.TestCase):
         mock_run_pipeline.assert_called_once_with("TCS")
 
 
+    @patch("services.research_client.requests.get")
+    def test_fetch_research_force_refresh_passes_param(self, mock_get):
+        """When force_refresh=True, client passes query parameter to Render API."""
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = _valid_canonical_response("TCS")
+        mock_get.return_value = resp
+
+        self.client.fetch_research("TCS", force_refresh=True)
+
+        _, kwargs = mock_get.call_args
+        self.assertEqual(kwargs.get("params"), {"force_refresh": "true"})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

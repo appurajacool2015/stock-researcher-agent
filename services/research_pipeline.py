@@ -1606,11 +1606,12 @@ def build_research_result(
     # SOURCES
     # ========================================================
 
+    screener_failed = screener_data.get("failed", False)
     sources = [
         {
             "source": "screener",
-            "status": "SUCCESS",
-            "fields_sourced": 13,
+            "status": "FAILED" if screener_failed else "SUCCESS",
+            "fields_sourced": 0 if screener_failed else 13,
             "source_url": screener_url,
             "retrieved_at": screener_retrieved_at,
             "as_of_date": (
@@ -1679,7 +1680,12 @@ def build_research_result(
 
         "sources": sources,
 
-        "errors": [],
+        "errors": [
+            {
+                "source": "screener",
+                "message": str(screener_data["error"]),
+            }
+        ] if screener_data.get("error") else [],
 
         "data_quality_summary": {},
     }
@@ -1812,28 +1818,46 @@ def run_pipeline(
 
     screener = ScreenerAdapter()
 
-    screener_data = screener.research(
-        symbol
-    )
+    try:
+        screener_data = screener.research(
+            symbol
+        )
 
-    print(
-        f"   Company: "
-        f"{screener_data.get('company_name')}"
-    )
+        print(
+            f"   Company: "
+            f"{screener_data.get('company_name')}"
+        )
 
-    print(
-        f"   HTML bytes: "
-        f"{screener_data.get('html_bytes')}"
-    )
+        print(
+            f"   HTML bytes: "
+            f"{screener_data.get('html_bytes')}"
+        )
 
-    print(
-        f"   Tables: "
-        f"{screener_data.get('table_count')}"
-    )
+        print(
+            f"   Tables: "
+            f"{screener_data.get('table_count')}"
+        )
 
-    print(
-        "   ✅ Screener extraction successful"
-    )
+        print(
+            "   ✅ Screener extraction successful"
+        )
+    except Exception as exc:
+        print(
+            f"   ⚠️ Screener extraction failed: {exc}"
+        )
+        screener_data = {
+            "symbol": symbol,
+            "company_name": symbol,
+            "url": f"https://www.screener.in/company/{symbol}/consolidated/",
+            "retrieved_at": utc_now(),
+            "as_of_dates": {"fundamentals": None, "institutional": None},
+            "fundamentals": {},
+            "institutional": {},
+            "html_bytes": 0,
+            "table_count": 0,
+            "failed": True,
+            "error": str(exc),
+        }
 
     print()
 

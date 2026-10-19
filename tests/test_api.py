@@ -86,15 +86,21 @@ class InMemoryTestClient:
             raw_headers.append((b"content-type", b"application/json"))
             raw_headers.append((b"content-length", str(len(body_bytes)).encode("latin-1")))
 
+        parsed_path = path
+        query_bytes = b""
+        if "?" in path:
+            parsed_path, raw_query = path.split("?", 1)
+            query_bytes = raw_query.encode("latin-1")
+
         scope = {
             "type": "http",
             "asgi": {"version": "3.0", "spec_version": "2.0"},
             "http_version": "1.1",
             "method": method.upper(),
             "scheme": "http",
-            "path": path,
-            "raw_path": path.encode("latin-1"),
-            "query_string": b"",
+            "path": parsed_path,
+            "raw_path": parsed_path.encode("latin-1"),
+            "query_string": query_bytes,
             "headers": raw_headers,
             "client": ("127.0.0.1", 12345),
             "server": ("127.0.0.1", 80),
@@ -410,6 +416,27 @@ class TestStockResearcherAPI(unittest.TestCase):
         self.assertTrue(data["_persistence"]["is_cached"])
         self.assertEqual(data["_persistence"]["recommendation_id"], "rec-cached-server")
         mock_run_pipeline.assert_not_called()
+
+    @patch("interfaces.api.SupabaseRepository")
+    @patch("interfaces.api.run_pipeline")
+    def test_get_research_force_refresh_bypasses_cache(self, mock_run_pipeline, mock_repo_cls):
+        """GET /research/{symbol}?force_refresh=true passes force_refresh=True to cache lookup."""
+        mock_result = make_mock_research_result("TCS")
+        mock_run_pipeline.return_value = mock_result
+
+        mock_repo = MagicMock()
+        mock_repo.is_configured = True
+        mock_repo.get_cached_assessment.return_value = (None, None)
+        mock_repo.get_baseline_assessment.return_value = None
+        mock_repo.save_research_snapshot.return_value = {"saved": True, "id": "snap-server-1"}
+        mock_repo.save_recommendation.return_value = {"saved": True, "id": "rec-server-1"}
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.get("/research/TCS?force_refresh=true", headers=self.auth_headers)
+        self.assertEqual(resp.status_code, 200)
+
+        mock_repo.get_cached_assessment.assert_called_once_with("TCS", 6.0, True)
+        mock_run_pipeline.assert_called_once_with("TCS")
 
     @patch("interfaces.api.SupabaseRepository")
     @patch("interfaces.api.run_pipeline")

@@ -152,10 +152,14 @@ def execute_stock_research(
     #    The Render server handles: cache check, baseline lookup, Supabase writes.
     #    The response includes a `_persistence` block with snapshot_id,
     #    recommendation_id, track_record, and is_cached.
-    research_result = client.fetch_research(
-        raw_symbol=symbol,
-        allow_local_fallback=False,
-    )
+    fetch_kwargs = {
+        "raw_symbol": symbol,
+        "allow_local_fallback": False,
+    }
+    if force_refresh:
+        fetch_kwargs["force_refresh"] = True
+
+    research_result = client.fetch_research(**fetch_kwargs)
 
     # 2. Read persistence metadata from server response
     persistence_block = research_result.pop("_persistence", {})

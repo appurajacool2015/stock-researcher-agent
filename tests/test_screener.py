@@ -15,6 +15,7 @@ Verifies:
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 from bs4 import BeautifulSoup
 
 from adapters.screener import ScreenerAdapter
@@ -186,6 +187,45 @@ class TestScreenerAdapter(unittest.TestCase):
 
         self.assertEqual(res["promoter"], 71.77)
         self.assertIsNone(res["promoter_pledge"])
+
+    @patch("services.research_pipeline.save_result")
+    @patch("adapters.screener.ScreenerAdapter.research")
+    @patch("adapters.market_data.MarketDataAdapter.research")
+    @patch("adapters.news.NewsAdapter.research")
+    def test_pipeline_screener_failure_graceful_partial(self, mock_news, mock_market, mock_screener, mock_save):
+        """When Screener raises ConnectionError, pipeline does not crash; returns valid ResearchResult v1 with PARTIAL status."""
+        import requests
+        from services.research_pipeline import run_pipeline
+
+        mock_screener.side_effect = requests.ConnectionError("Connection refused by Screener")
+        mock_market.return_value = {
+            "symbol": "TCS",
+            "yahoo_symbol": "TCS.NS",
+            "history_rows": 50,
+            "indicators": {"cmp": 2500.0, "rsi_14": 55.0},
+            "as_of_date": "2026-10-19",
+        }
+        mock_news.return_value = {
+            "articles": [],
+            "article_count": 0,
+            "lookback_days": 30,
+        }
+
+        result = run_pipeline("TCS")
+        self.assertEqual(result["schema_version"], "1.0")
+        self.assertEqual(result["overall_status"], "PARTIAL")
+        self.assertEqual(result["fundamentals"]["pe_ratio"]["status"], "UNAVAILABLE")
+        self.assertEqual(result["technicals"]["cmp"]["value"], 2500.0)
+
+        # Check sources
+        screener_source = next(s for s in result["sources"] if s["source"] == "screener")
+        self.assertEqual(screener_source["status"], "FAILED")
+        self.assertEqual(screener_source["fields_sourced"], 0)
+
+        # Check errors
+        self.assertTrue(len(result["errors"]) >= 1)
+        self.assertEqual(result["errors"][0]["source"], "screener")
+        self.assertIn("Connection refused", result["errors"][0]["message"])
 
 
 if __name__ == "__main__":

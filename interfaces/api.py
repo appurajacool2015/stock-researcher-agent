@@ -254,6 +254,10 @@ class ResearchRequest(BaseModel):
         description="Ticker symbol of the listed company (e.g. 'TCS', 'INFY')",
         examples=["TCS"],
     )
+    force_refresh: bool = Field(
+        False,
+        description="Whether to bypass 6-hour cache",
+    )
 
 
 @app.get("/health", tags=["System"])
@@ -266,7 +270,7 @@ async def health_check() -> Dict[str, Any]:
     }
 
 
-async def _execute_research(raw_symbol: str) -> JSONResponse:
+async def _execute_research(raw_symbol: str, force_refresh: bool = False) -> JSONResponse:
     """Normalize input, check cache, execute pipeline in a worker thread, persist, and respond."""
     try:
         symbol = normalize_symbol(raw_symbol)
@@ -307,7 +311,7 @@ async def _execute_research(raw_symbol: str) -> JSONResponse:
         # ------------------------------------------------------------------
         if repo.is_configured:
             cached_rec, cached_snap = await run_in_threadpool(
-                repo.get_cached_assessment, symbol
+                repo.get_cached_assessment, symbol, 6.0, force_refresh
             )
             if cached_rec is not None and cached_snap is not None:
                 baseline_rec = None
@@ -442,13 +446,13 @@ async def _execute_research(raw_symbol: str) -> JSONResponse:
 @app.post("/research", tags=["Research"], dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
 async def create_research(request: ResearchRequest) -> JSONResponse:
     """Trigger stock research via JSON payload (protected)."""
-    return await _execute_research(request.symbol)
+    return await _execute_research(request.symbol, force_refresh=request.force_refresh)
 
 
 @app.get("/research/{symbol}", tags=["Research"], dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
-async def get_research(symbol: str) -> JSONResponse:
+async def get_research(symbol: str, force_refresh: bool = False) -> JSONResponse:
     """Trigger stock research via URL path parameter (protected)."""
-    return await _execute_research(symbol)
+    return await _execute_research(symbol, force_refresh=force_refresh)
 
 
 def main() -> None:

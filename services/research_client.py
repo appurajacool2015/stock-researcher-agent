@@ -83,6 +83,7 @@ class ResearchClient:
         self,
         raw_symbol: str,
         allow_local_fallback: bool = False,
+        force_refresh: bool = False,
     ) -> Dict[str, Any]:
         """
         Fetch canonical ResearchResult for the requested symbol.
@@ -92,6 +93,7 @@ class ResearchClient:
         raw_symbol: Ticker symbol (e.g. 'TCS', 'INFY').
         allow_local_fallback: If True, falls back to local pipeline only after
                               Render API fails, explicitly marking the provenance.
+        force_refresh: If True, bypasses 6-hour cache on Render API server.
         """
         if not self.api_key:
             raise RenderAPIError(
@@ -112,10 +114,12 @@ class ResearchClient:
                     "Accept": "application/json",
                     "X-API-Key": self.api_key,
                 }
+                params = {"force_refresh": "true"} if force_refresh else None
                 resp = requests.get(
                     endpoint,
                     timeout=self.timeout,
                     headers=headers,
+                    params=params,
                 )
 
                 # Check if retryable transient server error
