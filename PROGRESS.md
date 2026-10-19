@@ -47,7 +47,7 @@ Deterministic stock research and rule-based investment assessment engine for Ind
 - **2026-10-17:** Implemented Balance Sheet fallback for Debt-to-Equity (0.10x for TCS) and deterministic PEG ratio (2.04 for TCS) in Key Metrics table; added dedicated `test_screener.py` (237 tests).
 - **2026-10-19:** Added browser headers, retry adapter with exponential backoff, and graceful partial fallback handling in `services/research_pipeline.py` (`2fa8465`); added cache-bypass `--force-refresh` plumbing across client and REST API (240 tests).
 - **2026-10-19:** Implemented authenticated `POST /research/persist` on Render API and hybrid recovery in client runner (`6ef2923`) so Oracle VM scrapes Screener unblocked and pushes full verified fundamentals to Supabase (243 tests).
-- **2026-10-19:** Fixed save_recommendation argument mismatch in `interfaces/api.py` and `services/supabase_repo.py` (`ef439dd`); 244 tests passing.
+- **2026-10-19:** Fixed save_recommendation argument mismatch in `interfaces/api.py` and `services/supabase_repo.py` (`ef439dd`); added live commit tracking and transparent 500 error reporting (`915b0ac`); 244 tests passing.
 
 ## 5. Risks and Open Issues
 - **Upcoming Earnings Calendar:** Public feeds currently lack forward quarterly results calendar; event risk remains unmodeled.
