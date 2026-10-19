@@ -161,6 +161,25 @@ def execute_stock_research(
 
     research_result = client.fetch_research(**fetch_kwargs)
 
+    # Hybrid Recovery: If Render's cloud IP was blocked by Screener (P/E UNAVAILABLE or Screener FAILED),
+    # run local deterministic scraper on VM (which has unblocked access) and push full data
+    # to Render API to persist snapshot + recommendation to Supabase.
+    screener_blocked_on_cloud = (
+        research_result.get("fundamentals", {}).get("pe_ratio", {}).get("status") == "UNAVAILABLE"
+        or any(
+            s.get("source") == "screener" and s.get("status") == "FAILED"
+            for s in research_result.get("sources", [])
+        )
+    )
+    if screener_blocked_on_cloud:
+        try:
+            local_result = _execute_local_pipeline(symbol)
+            if local_result.get("fundamentals", {}).get("pe_ratio", {}).get("status") == "VERIFIED":
+                persisted_data = client.persist_research(local_result)
+                research_result = persisted_data
+        except Exception:
+            pass
+
     # 2. Read persistence metadata from server response
     persistence_block = research_result.pop("_persistence", {})
     is_cached = persistence_block.get("is_cached", False)

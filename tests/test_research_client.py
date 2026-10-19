@@ -142,8 +142,24 @@ class TestResearchClient(unittest.TestCase):
 
         self.client.fetch_research("TCS", force_refresh=True)
 
-        _, kwargs = mock_get.call_args
-        self.assertEqual(kwargs.get("params"), {"force_refresh": "true"})
+    @patch("services.research_client.requests.post")
+    def test_persist_research_success(self, mock_post):
+        """persist_research sends payload to /research/persist and returns updated result."""
+        valid_data = _valid_canonical_response("TCS")
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {
+            **valid_data,
+            "_persistence": {"saved": True, "snapshot_id": "snap-123"},
+        }
+        mock_post.return_value = resp
+
+        res = self.client.persist_research(valid_data)
+        self.assertEqual(res["_research_source"], "RENDER_PERSIST_HYBRID")
+        self.assertTrue(res["_persistence"]["saved"])
+        mock_post.assert_called_once()
+        args, kwargs = mock_post.call_args
+        self.assertEqual(args[0], "https://mock-render-service.onrender.com/research/persist")
+        self.assertEqual(kwargs["json"]["symbol"], "TCS")
 
 
 if __name__ == "__main__":

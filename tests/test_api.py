@@ -439,6 +439,29 @@ class TestStockResearcherAPI(unittest.TestCase):
         mock_run_pipeline.assert_called_once_with("TCS")
 
     @patch("interfaces.api.SupabaseRepository")
+    def test_persist_research_snapshot_success(self, mock_repo_cls):
+        """POST /research/persist accepts valid snapshot and writes to Supabase."""
+        mock_result = make_mock_research_result("TCS")
+
+        mock_repo = MagicMock()
+        mock_repo.is_configured = True
+        mock_repo.get_baseline_assessment.return_value = None
+        mock_repo.save_research_snapshot.return_value = {"saved": True, "id": "snap-persisted-1"}
+        mock_repo.save_recommendation.return_value = {"saved": True, "id": "rec-persisted-1"}
+        mock_repo_cls.return_value = mock_repo
+
+        resp = self.client.post("/research/persist", json=mock_result, headers=self.auth_headers)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+
+        self.assertIn("_persistence", data)
+        self.assertTrue(data["_persistence"]["saved"])
+        self.assertEqual(data["_persistence"]["snapshot_id"], "snap-persisted-1")
+        self.assertEqual(data["_persistence"]["recommendation_id"], "rec-persisted-1")
+        mock_repo.save_research_snapshot.assert_called_once()
+        mock_repo.save_recommendation.assert_called_once()
+
+    @patch("interfaces.api.SupabaseRepository")
     @patch("interfaces.api.run_pipeline")
     def test_server_side_persistence_unconfigured_graceful(self, mock_run_pipeline, mock_repo_cls):
         """When Supabase is not configured on server, returns 200 with saved=False in _persistence."""

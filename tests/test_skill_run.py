@@ -311,6 +311,42 @@ class TestSkillRun(unittest.TestCase):
             )
             mock_pipeline.assert_not_called()
 
+    @patch.object(_skill_run_mod, "run_pipeline")
+    @patch.object(_skill_run_mod, "ResearchClient")
+    def test_prod_mode_hybrid_recovery_when_screener_blocked(self, mock_client_cls, mock_pipeline):
+        """When Render returns UNAVAILABLE for fundamentals, client executes local scraper and persists via Render."""
+        partial_from_render = _mock_api_response("TCS")
+        partial_from_render["fundamentals"]["pe_ratio"]["status"] = "UNAVAILABLE"
+        partial_from_render["sources"] = [{"source": "screener", "status": "FAILED"}]
+
+        full_local = _mock_research_result("TCS")
+        full_local["fundamentals"]["pe_ratio"]["status"] = "VERIFIED"
+        mock_pipeline.return_value = full_local
+
+        persisted_response = {
+            **full_local,
+            "_persistence": {
+                "saved": True,
+                "is_cached": False,
+                "recommendation_id": "rec-persisted-1",
+                "snapshot_id": "snap-persisted-1",
+                "track_record": {"status": "BASELINE_ESTABLISHED"},
+            },
+        }
+
+        mock_client = MagicMock()
+        mock_client.fetch_research.return_value = partial_from_render
+        mock_client.persist_research.return_value = persisted_response
+        mock_client_cls.return_value = mock_client
+
+        result = execute_stock_research("TCS", env="prod")
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["persistence_status"]["saved"])
+        self.assertEqual(result["persistence_status"]["id"], "rec-persisted-1")
+        mock_pipeline.assert_called_once_with(symbol="TCS")
+        mock_client.persist_research.assert_called_once_with(full_local)
+
     @patch.object(_skill_run_mod, "ResearchClient")
     def test_dev_mode_local_pipeline_and_supabase_bypass(self, mock_client_cls):
         """DEV mode routes to local pipeline and completely bypasses Supabase cache and persistence."""

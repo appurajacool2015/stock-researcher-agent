@@ -455,6 +455,121 @@ async def get_research(symbol: str, force_refresh: bool = False) -> JSONResponse
     return await _execute_research(symbol, force_refresh=force_refresh)
 
 
+@app.post("/research/persist", tags=["Research"], dependencies=[Depends(verify_api_key), Depends(check_rate_limit)])
+async def persist_research_snapshot(snapshot: Dict[str, Any]) -> JSONResponse:
+    """
+    Accept an externally gathered canonical ResearchResult v1 payload,
+    evaluate investment assessment, and persist snapshot + recommendation
+    directly into Supabase.
+    """
+    if not isinstance(snapshot, dict):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "ok": False,
+                "error": {
+                    "type": "ValueError",
+                    "message": "Payload must be a JSON object conforming to ResearchResult v1",
+                },
+            },
+        )
+
+    raw_symbol = snapshot.get("symbol")
+    if not raw_symbol or not isinstance(raw_symbol, str):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "ok": False,
+                "error": {
+                    "type": "ValueError",
+                    "message": "Missing or invalid symbol in research snapshot payload",
+                },
+            },
+        )
+
+    try:
+        symbol = normalize_symbol(raw_symbol)
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "ok": False,
+                "error": {
+                    "type": "ValueError",
+                    "message": str(exc),
+                },
+            },
+        )
+
+    # 1. Evaluate deterministic assessment
+    try:
+        recommendation = evaluate_investment_assessment(snapshot)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "ok": False,
+                "error": {
+                    "type": "AssessmentEvaluationError",
+                    "message": f"Failed to evaluate investment assessment from snapshot: {exc}",
+                },
+            },
+        )
+
+    # 2. Persist to Supabase if configured
+    repo = SupabaseRepository()
+    baseline_rec = None
+    if repo.is_configured:
+        try:
+            base_cand = await run_in_threadpool(repo.get_baseline_assessment, symbol)
+            if isinstance(base_cand, dict):
+                baseline_rec = base_cand
+        except SupabaseRepositoryError:
+            baseline_rec = None
+
+    track_record = calculate_track_record(recommendation, baseline_rec)
+    recommendation["track_record"] = track_record
+
+    if repo.is_configured:
+        snap_result = await run_in_threadpool(repo.save_research_snapshot, snapshot)
+        if snap_result.get("saved") and snap_result.get("id"):
+            rec_result = await run_in_threadpool(
+                repo.save_recommendation,
+                recommendation,
+                research_run_id=snap_result["id"],
+            )
+            persistence = {
+                "saved": rec_result.get("saved", False),
+                "snapshot_id": snap_result.get("id"),
+                "recommendation_id": rec_result.get("id"),
+                "is_cached": False,
+                "track_record": track_record,
+                "warning": rec_result.get("warning"),
+            }
+        else:
+            persistence = {
+                "saved": False,
+                "is_cached": False,
+                "warning": snap_result.get("warning") or "Snapshot persistence failed.",
+                "track_record": track_record,
+            }
+    else:
+        persistence = {
+            "saved": False,
+            "is_cached": False,
+            "warning": "Supabase not configured on server; persistence skipped.",
+            "track_record": track_record,
+        }
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            **snapshot,
+            "_persistence": persistence,
+        },
+    )
+
+
 def main() -> None:
     """CLI launcher for uvicorn server."""
     import uvicorn

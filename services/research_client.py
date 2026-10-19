@@ -175,6 +175,45 @@ class ResearchClient:
                 f"{err_msg}. Authorized local fallback also failed: {local_exc}"
             ) from local_exc
 
+    def persist_research(
+        self,
+        snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Push an externally gathered canonical ResearchResult v1 payload to Render
+        to evaluate assessment and persist to Supabase.
+        """
+        if not self.api_key:
+            raise RenderAPIError(
+                "Authentication configuration error: RESEARCH_API_KEY environment variable is missing."
+            )
+
+        endpoint = f"{self.base_url}/research/persist"
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-API-Key": self.api_key,
+        }
+
+        try:
+            resp = requests.post(
+                endpoint,
+                headers=headers,
+                json=snapshot,
+                timeout=self.timeout,
+            )
+            if resp.status_code != 200:
+                raise RenderAPIError(
+                    f"Render API persist returned HTTP {resp.status_code}: {resp.text[:200]}"
+                )
+            data = resp.json()
+            if not isinstance(data, dict):
+                raise RenderSchemaValidationError("Render API persist returned non-object JSON")
+            data["_research_source"] = "RENDER_PERSIST_HYBRID"
+            return data
+        except Exception as exc:
+            raise RenderAPIError(f"Failed to persist research via {endpoint}: {exc}") from exc
+
     def _validate_payload(self, data: Dict[str, Any], symbol: str) -> None:
         """Validate structure and essential ResearchResult v1 invariants."""
         if data.get("schema_version") != "1.0":
