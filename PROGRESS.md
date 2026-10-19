@@ -23,11 +23,12 @@ Deterministic stock research and rule-based investment assessment engine for Ind
 - **Unit Test Suite:** **244 tests passing locally** with `git diff --check` clean.
 
 ### Deployed & Live-Verified
-- **Render Live Security & Persistence Deployment:** Deployed commit `ef439dd` on Render. Verified:
-  - `GET /health` returns HTTP 200 without credentials.
+- **Render Live Security & Persistence Deployment:** Deployed commit `c819979` on Render. Verified:
+  - `GET /health` returns HTTP 200 with active commit tracking (`commit: c819979`).
   - Render environment configured with `RESEARCH_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_URL`.
-  - Client runner (`skills/stock-research/run.py`) functions with only `RESEARCH_API_KEY`.
-- **Live Supabase Multi-Day Track Record:** Verified baseline for `TCS` established Oct 15 (₹2,350.00) vs Oct 16 run (₹2,465.00, +4.89% price return) across 2 rows in each table. Today's live run (Oct 19, CMP ₹2,460.40) verified in Supabase.
+  - Client runner (`skills/stock-research/run.py`) functions with only `RESEARCH_API_KEY` (zero DB credentials on client).
+  - Hybrid persistence verified end-to-end: Oracle VM scrapes verified fundamentals, pushes to Render API `POST /research/persist`, and persists to Supabase with zero audit warnings (recommendation ID: `49dbfab0-b72d-44a0-89ab-e3a13b32735a`).
+- **Live Supabase Multi-Day Track Record:** Verified baseline for `TCS` established Oct 15 (₹2,350.00) vs Oct 19 run (₹2,460.90, +4.72% price return, `HOLD_REVIEW` ➔ `AVOID_NEW_ENTRY` transition) cleanly computed from Supabase.
 
 ### Remaining Work
 1. **OpenClaw Skill Integration:** Mount `skills/stock-research/` into OpenClaw workspace on the Oracle VM.
@@ -48,6 +49,7 @@ Deterministic stock research and rule-based investment assessment engine for Ind
 - **2026-10-19:** Added browser headers, retry adapter with exponential backoff, and graceful partial fallback handling in `services/research_pipeline.py` (`2fa8465`); added cache-bypass `--force-refresh` plumbing across client and REST API (240 tests).
 - **2026-10-19:** Implemented authenticated `POST /research/persist` on Render API and hybrid recovery in client runner (`6ef2923`) so Oracle VM scrapes Screener unblocked and pushes full verified fundamentals to Supabase (243 tests).
 - **2026-10-19:** Fixed save_recommendation argument mismatch in `interfaces/api.py` and `services/supabase_repo.py` (`ef439dd`); added live commit tracking and transparent 500 error reporting (`915b0ac`); 244 tests passing.
+- **2026-10-19:** Verified full end-to-end cloud persistence and track record calculation from Oracle VM through Render API (`c819979`) to Supabase (rec ID: `49dbfab0-b72d-44a0-89ab-e3a13b32735a`) with zero client DB keys and zero persistence warnings.
 
 ## 5. Risks and Open Issues
 - **Upcoming Earnings Calendar:** Public feeds currently lack forward quarterly results calendar; event risk remains unmodeled.
