@@ -172,13 +172,21 @@ def execute_stock_research(
         )
     )
     if screener_blocked_on_cloud:
+        local_result = None
         try:
             local_result = _execute_local_pipeline(symbol)
             if local_result.get("fundamentals", {}).get("pe_ratio", {}).get("status") == "VERIFIED":
                 persisted_data = client.persist_research(local_result)
                 research_result = persisted_data
-        except Exception:
-            pass
+        except Exception as persist_exc:
+            print(f"   ⚠️ Hybrid persist notice: {persist_exc}", file=sys.stderr)
+            if local_result is not None and local_result.get("fundamentals", {}).get("pe_ratio", {}).get("status") == "VERIFIED":
+                research_result = local_result
+                research_result["_persistence"] = {
+                    "saved": False,
+                    "is_cached": False,
+                    "warning": f"Server persistence failed ({persist_exc}); generated from verified local execution.",
+                }
 
     # 2. Read persistence metadata from server response
     persistence_block = research_result.pop("_persistence", {})
