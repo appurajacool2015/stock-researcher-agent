@@ -217,6 +217,23 @@ class ConcurrencyLimiter:
 _concurrency_limiter = ConcurrencyLimiter()
 
 
+def _get_commit_sha() -> str:
+    """Resolve active git commit SHA for deployment tracking."""
+    commit = os.environ.get("RENDER_GIT_COMMIT")
+    if not commit:
+        try:
+            import subprocess
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(PROJECT_ROOT),
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except Exception:
+            commit = "dev"
+    return commit[:7]
+
+
 def create_app() -> FastAPI:
     """Application factory applying environment-aware documentation settings."""
     is_prod = is_production_environment()
@@ -238,6 +255,32 @@ def create_app() -> FastAPI:
                 "error": {
                     "type": "HTTPException",
                     "message": exc.detail,
+                },
+            },
+        )
+
+    @application.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        import traceback
+        err_type = type(exc).__name__
+        err_msg = str(exc)
+        tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        logger.error(
+            "Unhandled server error on %s %s: %s: %s\n%s",
+            request.method,
+            request.url.path,
+            err_type,
+            err_msg,
+            tb_str,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "ok": False,
+                "error": {
+                    "type": err_type,
+                    "message": err_msg,
+                    "detail": tb_str[-400:],
                 },
             },
         )
@@ -267,6 +310,7 @@ async def health_check() -> Dict[str, Any]:
         "ok": True,
         "service": "stock-researcher-api",
         "status": "healthy",
+        "commit": _get_commit_sha(),
     }
 
 
@@ -517,49 +561,65 @@ async def persist_research_snapshot(snapshot: Dict[str, Any]) -> JSONResponse:
         )
 
     # 2. Persist to Supabase if configured
-    repo = SupabaseRepository()
-    baseline_rec = None
-    if repo.is_configured:
-        try:
-            base_cand = await run_in_threadpool(repo.get_baseline_assessment, symbol)
-            if isinstance(base_cand, dict):
-                baseline_rec = base_cand
-        except SupabaseRepositoryError:
-            baseline_rec = None
+    try:
+        repo = SupabaseRepository()
+        baseline_rec = None
+        if repo.is_configured:
+            try:
+                base_cand = await run_in_threadpool(repo.get_baseline_assessment, symbol)
+                if isinstance(base_cand, dict):
+                    baseline_rec = base_cand
+            except SupabaseRepositoryError:
+                baseline_rec = None
 
-    track_record = calculate_track_record(recommendation, baseline_rec)
-    recommendation["track_record"] = track_record
+        track_record = calculate_track_record(recommendation, baseline_rec)
+        recommendation["track_record"] = track_record
 
-    if repo.is_configured:
-        snap_result = await run_in_threadpool(repo.save_research_snapshot, snapshot)
-        if snap_result.get("saved") and snap_result.get("id"):
-            rec_result = await run_in_threadpool(
-                repo.save_recommendation,
-                recommendation,
-                snap_result["id"],
-            )
-            persistence = {
-                "saved": rec_result.get("saved", False),
-                "snapshot_id": snap_result.get("id"),
-                "recommendation_id": rec_result.get("id"),
-                "is_cached": False,
-                "track_record": track_record,
-                "warning": rec_result.get("warning"),
-            }
+        if repo.is_configured:
+            snap_result = await run_in_threadpool(repo.save_research_snapshot, snapshot)
+            if snap_result.get("saved") and snap_result.get("id"):
+                rec_result = await run_in_threadpool(
+                    repo.save_recommendation,
+                    recommendation,
+                    snap_result["id"],
+                )
+                persistence = {
+                    "saved": rec_result.get("saved", False),
+                    "snapshot_id": snap_result.get("id"),
+                    "recommendation_id": rec_result.get("id"),
+                    "is_cached": False,
+                    "track_record": track_record,
+                    "warning": rec_result.get("warning"),
+                }
+            else:
+                persistence = {
+                    "saved": False,
+                    "is_cached": False,
+                    "warning": snap_result.get("warning") or "Snapshot persistence failed.",
+                    "track_record": track_record,
+                }
         else:
             persistence = {
                 "saved": False,
                 "is_cached": False,
-                "warning": snap_result.get("warning") or "Snapshot persistence failed.",
+                "warning": "Supabase not configured on server; persistence skipped.",
                 "track_record": track_record,
             }
-    else:
-        persistence = {
-            "saved": False,
-            "is_cached": False,
-            "warning": "Supabase not configured on server; persistence skipped.",
-            "track_record": track_record,
-        }
+    except Exception as exc:
+        import traceback
+        tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        logger.error("Error in persist_research_snapshot for %s: %s\n%s", symbol, exc, tb_str)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "ok": False,
+                "error": {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                    "detail": tb_str[-400:],
+                },
+            },
+        )
 
     return JSONResponse(
         status_code=status.HTTP_200_OK,
