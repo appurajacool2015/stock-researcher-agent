@@ -367,15 +367,25 @@ async def _execute_research(raw_symbol: str, force_refresh: bool = False) -> JSO
                     baseline_rec = None
                 track_record = calculate_track_record(cached_rec, baseline_rec)
                 cached_rec["track_record"] = track_record
+
+                # Ensure canonical payload has technicals/fundamentals at top level
+                raw_data = cached_snap.get("research_data")
+                if isinstance(raw_data, dict) and "technicals" in raw_data and "fundamentals" in raw_data:
+                    canonical_snap = dict(raw_data)
+                else:
+                    canonical_snap = dict(cached_snap)
+
+                snapshot_id = cached_snap.get("id") or cached_snap.get("_snapshot_db_id") or cached_snap.get("research_id")
+
                 return JSONResponse(
                     status_code=status.HTTP_200_OK,
                     content={
-                        **cached_snap,
+                        **canonical_snap,
                         "_persistence": {
                             "saved": True,
                             "is_cached": True,
                             "recommendation_id": cached_rec.get("id"),
-                            "snapshot_id": cached_snap.get("research_id"),
+                            "snapshot_id": snapshot_id,
                             "track_record": track_record,
                         },
                     },

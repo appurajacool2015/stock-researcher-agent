@@ -69,6 +69,46 @@ class TestSupabaseRepository(unittest.TestCase):
         self.assertEqual(cached_snap["id"], "snap-9876")
 
     @patch("services.supabase_repo.requests.get")
+    def test_cache_hit_unpacks_canonical_research_data(self, mock_get):
+        """When snapshot has nested research_data with technicals and fundamentals, it is unpacked to top level."""
+        rec_data = {
+            "id": "rec-1234",
+            "research_run_id": "snap-9876",
+            "symbol": "INFY",
+            "engine_version": ENGINE_VERSION,
+            "investment_action": "HOLD_REVIEW",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        canonical_payload = {
+            "symbol": "INFY",
+            "exchange": "NSE",
+            "schema_version": "1.0",
+            "technicals": {"cmp": {"value": 1130.7}},
+            "fundamentals": {"pe_ratio": {"value": 14.7}},
+        }
+        snap_data = {
+            "id": "snap-9876",
+            "research_id": "infy-run-1",
+            "symbol": "INFY",
+            "schema_version": "1.0",
+            "overall_status": "PARTIAL",
+            "research_data": canonical_payload,
+        }
+
+        resp1 = MagicMock(status_code=200)
+        resp1.json.return_value = [rec_data]
+        resp2 = MagicMock(status_code=200)
+        resp2.json.return_value = [snap_data]
+        mock_get.side_effect = [resp1, resp2]
+
+        cached_rec, cached_snap = self.repo.get_cached_assessment("INFY")
+        self.assertIsNotNone(cached_snap)
+        self.assertIn("technicals", cached_snap)
+        self.assertIn("fundamentals", cached_snap)
+        self.assertEqual(cached_snap["technicals"]["cmp"]["value"], 1130.7)
+        self.assertEqual(cached_snap["_snapshot_db_id"], "snap-9876")
+
+    @patch("services.supabase_repo.requests.get")
     def test_cache_miss_empty_result(self, mock_get):
         """Empty query returns (None, None) cache miss."""
         resp = MagicMock(status_code=200)

@@ -150,6 +150,14 @@ class SupabaseRepository:
             if snap.get("schema_version") != "1.0":
                 return None, None
 
+            # Unpack canonical ResearchResult v1 stored in research_data
+            raw_data = snap.get("research_data")
+            if isinstance(raw_data, dict) and "technicals" in raw_data and "fundamentals" in raw_data:
+                snap_result = dict(raw_data)
+                snap_result["_snapshot_db_id"] = snap.get("id")
+            else:
+                snap_result = dict(snap)
+
             # Enrich recommendation with cache metadata
             rec_result = dict(rec)
             rec_result["is_cached"] = True
@@ -159,7 +167,7 @@ class SupabaseRepository:
                 "cached_research_run_id": str(research_run_id),
             }
 
-            return rec_result, snap
+            return rec_result, snap_result
 
         except Exception:
             # Network or parsing failure during cache check falls back cleanly to fresh fetch

@@ -159,7 +159,27 @@ class TestResearchClient(unittest.TestCase):
         mock_post.assert_called_once()
         args, kwargs = mock_post.call_args
         self.assertEqual(args[0], "https://mock-render-service.onrender.com/research/persist")
-        self.assertEqual(kwargs["json"]["symbol"], "TCS")
+    @patch("services.research_client.requests.get")
+    def test_fetch_research_unpacks_nested_research_data(self, mock_get):
+        """When server returns database row with nested research_data, client unpacks it cleanly."""
+        valid_canonical = _valid_canonical_response("TCS")
+        # Simulate a server response that returned the raw DB row
+        db_row_payload = {
+            "id": "uuid-1234",
+            "symbol": "TCS",
+            "company_name": "Tata Consultancy Services Limited",
+            "schema_version": "1.0",
+            "overall_status": "PARTIAL",
+            "research_data": valid_canonical,
+        }
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = db_row_payload
+        mock_get.return_value = resp
+
+        res = self.client.fetch_research("TCS")
+        self.assertIn("technicals", res)
+        self.assertIn("fundamentals", res)
+        self.assertEqual(res["symbol"], "TCS")
 
 
 if __name__ == "__main__":

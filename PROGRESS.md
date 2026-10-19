@@ -28,7 +28,7 @@ Deterministic stock research and rule-based investment assessment engine for Ind
   - Render environment configured with `RESEARCH_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_URL`.
   - Client runner (`skills/stock-research/run.py`) functions with only `RESEARCH_API_KEY` (zero DB credentials on client).
   - Hybrid persistence verified end-to-end: Oracle VM scrapes verified fundamentals, pushes to Render API `POST /research/persist`, and persists to Supabase with zero audit warnings (recommendation ID: `49dbfab0-b72d-44a0-89ab-e3a13b32735a`).
-- **Live Supabase Multi-Day Track Record:** Verified baseline for `TCS` established Oct 15 (₹2,350.00) vs Oct 19 run (₹2,460.90, +4.72% price return, `HOLD_REVIEW` ➔ `AVOID_NEW_ENTRY` transition) cleanly computed from Supabase.
+- **Live Supabase Multi-Day Track Record:** Verified baseline for `TCS` established Oct 15 (₹2,350.00) vs Oct 19 run (₹2,460.90, +4.72% price return, `HOLD_REVIEW` ➔ `AVOID_NEW_ENTRY` transition) cleanly computed from Supabase. Live baseline established for `INFY` (Oct 19, CMP ₹1,130.70, P/E 14.70x, ROCE 40.0%, ROE 31.9%, D/E 0.10, PEG 1.84, rec ID `75f4f39c-1ad2-4a40-add9-45723be08191`).
 
 ### Remaining Work
 1. **OpenClaw Skill Integration:** Mount `skills/stock-research/` into OpenClaw workspace on the Oracle VM.
@@ -50,6 +50,8 @@ Deterministic stock research and rule-based investment assessment engine for Ind
 - **2026-10-19:** Implemented authenticated `POST /research/persist` on Render API and hybrid recovery in client runner (`6ef2923`) so Oracle VM scrapes Screener unblocked and pushes full verified fundamentals to Supabase (243 tests).
 - **2026-10-19:** Fixed save_recommendation argument mismatch in `interfaces/api.py` and `services/supabase_repo.py` (`ef439dd`); added live commit tracking and transparent 500 error reporting (`915b0ac`); 244 tests passing.
 - **2026-10-19:** Verified full end-to-end cloud persistence and track record calculation from Oracle VM through Render API (`c819979`) to Supabase (rec ID: `49dbfab0-b72d-44a0-89ab-e3a13b32735a`) with zero client DB keys and zero persistence warnings.
+- **2026-10-19:** Live-verified second security (`INFY`) in production via Render API & Supabase persistence (rec ID: `75f4f39c-1ad2-4a40-add9-45723be08191`) with 100% verified fundamentals and zero audit warnings.
+- **2026-10-19:** Fixed 6-hour cache response unpacking in `services/supabase_repo.py`, `interfaces/api.py`, and `services/research_client.py` so cached snapshots cleanly unpack `research_data` to top-level canonical fields (246 tests passing).
 
 ## 5. Risks and Open Issues
 - **Upcoming Earnings Calendar:** Public feeds currently lack forward quarterly results calendar; event risk remains unmodeled.

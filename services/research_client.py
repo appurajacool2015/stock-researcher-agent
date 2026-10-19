@@ -216,6 +216,14 @@ class ResearchClient:
 
     def _validate_payload(self, data: Dict[str, Any], symbol: str) -> None:
         """Validate structure and essential ResearchResult v1 invariants."""
+        # Defense-in-depth: If nested research_data is present (e.g. from raw DB row), unpack it
+        if "research_data" in data and isinstance(data["research_data"], dict):
+            if "technicals" not in data or "fundamentals" not in data:
+                nested = data.pop("research_data")
+                for k, v in nested.items():
+                    if k not in data:
+                        data[k] = v
+
         if data.get("schema_version") != "1.0":
             raise RenderSchemaValidationError(
                 f"Unsupported schema version: {data.get('schema_version')!r} (expected '1.0')"
