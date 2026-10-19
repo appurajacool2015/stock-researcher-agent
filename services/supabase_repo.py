@@ -360,12 +360,16 @@ class SupabaseRepository:
     def save_recommendation(
         self,
         recommendation: Dict[str, Any],
-        research_snapshot_id: str,
+        research_snapshot_id: Optional[str] = None,
+        snapshot_id: Optional[str] = None,
+        research_run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Append investment recommendation record linked to research snapshot.
         Idempotent: returns existing ID if (research_run_id, engine_version) already exists.
+        Supports research_snapshot_id, snapshot_id, or research_run_id kwargs/args.
         """
+        target_snapshot_id = research_snapshot_id or snapshot_id or research_run_id or ""
         if not self.is_configured:
             return {
                 "saved": False,
@@ -379,7 +383,7 @@ class SupabaseRepository:
 
         # 1. Idempotency check
         check_params = {
-            "research_run_id": f"eq.{research_snapshot_id}",
+            "research_run_id": f"eq.{target_snapshot_id}",
             "engine_version": f"eq.{engine_ver}",
             "limit": "1",
         }
@@ -403,7 +407,7 @@ class SupabaseRepository:
 
         # 2. Insert record
         payload = {
-            "research_run_id": research_snapshot_id,
+            "research_run_id": target_snapshot_id,
             "symbol": recommendation.get("symbol"),
             "assessment_timestamp": recommendation.get("assessment_timestamp") or datetime.now(timezone.utc).isoformat(),
             "market_data_as_of": recommendation.get("market_data_as_of"),

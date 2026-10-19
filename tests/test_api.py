@@ -460,6 +460,8 @@ class TestStockResearcherAPI(unittest.TestCase):
         self.assertEqual(data["_persistence"]["recommendation_id"], "rec-persisted-1")
         mock_repo.save_research_snapshot.assert_called_once()
         mock_repo.save_recommendation.assert_called_once()
+        call_args, _ = mock_repo.save_recommendation.call_args
+        self.assertEqual(call_args[1], "snap-persisted-1")
 
     @patch("interfaces.api.SupabaseRepository")
     @patch("interfaces.api.run_pipeline")

@@ -536,7 +536,7 @@ async def persist_research_snapshot(snapshot: Dict[str, Any]) -> JSONResponse:
             rec_result = await run_in_threadpool(
                 repo.save_recommendation,
                 recommendation,
-                research_run_id=snap_result["id"],
+                snap_result["id"],
             )
             persistence = {
                 "saved": rec_result.get("saved", False),

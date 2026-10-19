@@ -151,6 +151,32 @@ class TestSupabaseRepository(unittest.TestCase):
         self.assertEqual(result["id"], "rec-uuid-existing")
         self.assertTrue(result["is_duplicate"])
 
+    @patch("services.supabase_repo.requests.get")
+    def test_save_recommendation_supports_keyword_aliases(self, mock_get):
+        """save_recommendation accepts research_snapshot_id, snapshot_id, research_run_id, or positional."""
+        mock_get.return_value = MagicMock(status_code=200, json=lambda: [{"id": "rec-1"}])
+
+        # Test snapshot_id kwarg
+        res1 = self.repo.save_recommendation(
+            recommendation={"symbol": "TCS", "engine_version": ENGINE_VERSION},
+            snapshot_id="snap-alias-1",
+        )
+        self.assertEqual(res1["id"], "rec-1")
+
+        # Test research_run_id kwarg
+        res2 = self.repo.save_recommendation(
+            recommendation={"symbol": "TCS", "engine_version": ENGINE_VERSION},
+            research_run_id="snap-alias-2",
+        )
+        self.assertEqual(res2["id"], "rec-1")
+
+        # Test positional arg
+        res3 = self.repo.save_recommendation(
+            {"symbol": "TCS", "engine_version": ENGINE_VERSION},
+            "snap-alias-3",
+        )
+        self.assertEqual(res3["id"], "rec-1")
+
     @patch.dict("os.environ", {"SUPABASE_URL": "", "SUPABASE_SERVICE_ROLE_KEY": ""}, clear=False)
     def test_unconfigured_repository_graceful(self):
         """Unconfigured repo returns saved=False with warning and never crashes."""
