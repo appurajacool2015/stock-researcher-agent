@@ -19,14 +19,15 @@ Deterministic stock research and rule-based investment assessment engine for Ind
 - **Buying Zone Assessment (Phase 1):** Deterministic 5-label entry evaluator (`intelligence/buying_zone.py`) computing invalidation levels, targets, and reward-to-risk ratios.
 - **Key Metrics & Fundamentals Enhancement:** Added Balance Sheet fallback in `adapters/screener.py` for Debt-to-Equity (borrowings/equity calculation and 0.00x zero-debt resolution) and deterministic PEG calculation in `intelligence/investment_assessment.py`.
 - **Screener Resilience & Retries:** Added realistic browser headers, HTTPAdapter retries with backoff, standalone URL fallback, and graceful partial failure handling (`overall_status: PARTIAL`, source `FAILED`, errors preserved) so single-source blocks never crash the server.
-- **Unit Test Suite:** **240 tests passing locally** with `git diff --check` clean.
+- **Hybrid Cloud/Local Persistence:** Implemented authenticated `POST /research/persist` in `interfaces/api.py` and client auto-recovery in `skills/stock-research/run.py` (`6ef2923`). If Render's cloud IP is blocked by Screener, the client runs local scraping on Oracle VM (unblocked) and pushes verified data to Render to persist to Supabase with zero database credentials on client.
+- **Unit Test Suite:** **243 tests passing locally** with `git diff --check` clean.
 
 ### Deployed & Live-Verified
-- **Render Live Security & Persistence Deployment:** Deployed commit `2fa8465` on Render. Verified:
+- **Render Live Security & Persistence Deployment:** Deployed commit `6ef2923` on Render. Verified:
   - `GET /health` returns HTTP 200 without credentials.
   - Render environment configured with `RESEARCH_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_URL`.
   - Client runner (`skills/stock-research/run.py`) functions with only `RESEARCH_API_KEY`.
-- **Live Supabase Multi-Day Track Record:** Verified baseline for `TCS` established Oct 15 (₹2,350.00) vs Oct 16 run (₹2,465.00, +4.89% price return) across 2 rows in each table.
+- **Live Supabase Multi-Day Track Record:** Verified baseline for `TCS` established Oct 15 (₹2,350.00) vs Oct 16 run (₹2,465.00, +4.89% price return) across 2 rows in each table. Today's live run (Oct 19, CMP ₹2,460.40) verified in Supabase.
 
 ### Remaining Work
 1. **OpenClaw Skill Integration:** Mount `skills/stock-research/` into OpenClaw workspace on the Oracle VM.
@@ -45,6 +46,7 @@ Deterministic stock research and rule-based investment assessment engine for Ind
 - **2026-10-17:** Documented Buying Zone, 16-row Key Metrics, decoupled Oracle VM architecture, and Supabase RLS resolution in README.md and Master Manual v3.0 (`36bfa7e`).
 - **2026-10-17:** Implemented Balance Sheet fallback for Debt-to-Equity (0.10x for TCS) and deterministic PEG ratio (2.04 for TCS) in Key Metrics table; added dedicated `test_screener.py` (237 tests).
 - **2026-10-19:** Added browser headers, retry adapter with exponential backoff, and graceful partial fallback handling in `services/research_pipeline.py` (`2fa8465`); added cache-bypass `--force-refresh` plumbing across client and REST API (240 tests).
+- **2026-10-19:** Implemented authenticated `POST /research/persist` on Render API and hybrid recovery in client runner (`6ef2923`) so Oracle VM scrapes Screener unblocked and pushes full verified fundamentals to Supabase (243 tests).
 
 ## 5. Risks and Open Issues
 - **Upcoming Earnings Calendar:** Public feeds currently lack forward quarterly results calendar; event risk remains unmodeled.
