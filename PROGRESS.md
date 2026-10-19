@@ -1,6 +1,6 @@
 # PROGRESS.md — Stock Researcher Agent
 *Last Updated: 2026-10-19*
-*Last Session: 2026-10-19 (Persistence Endpoint Bugfix and Hybrid Fallback Recovery)*
+*Last Session: 2026-10-19 (Cache Unpack Resolution, End-to-End INFY Live Verification & Baseline Tracking)*
 
 ## 1. Purpose
 Deterministic stock research and rule-based investment assessment engine for Indian listed equities (NSE/BSE). Collects verifiable factual data, computes indicators, derives audit-grade classifications, tracks performance against research baselines, and evaluates entry buying zones.
@@ -20,15 +20,15 @@ Deterministic stock research and rule-based investment assessment engine for Ind
 - **Key Metrics & Fundamentals Enhancement:** Added Balance Sheet fallback in `adapters/screener.py` for Debt-to-Equity (borrowings/equity calculation and 0.00x zero-debt resolution) and deterministic PEG calculation in `intelligence/investment_assessment.py`.
 - **Screener Resilience & Retries:** Added realistic browser headers, HTTPAdapter retries with backoff, standalone URL fallback, and graceful partial failure handling (`overall_status: PARTIAL`, source `FAILED`, errors preserved) so single-source blocks never crash the server.
 - **Hybrid Cloud/Local Persistence:** Implemented authenticated `POST /research/persist` in `interfaces/api.py` and client auto-recovery in `skills/stock-research/run.py` (`6ef2923`, `ef439dd`). If Render's cloud IP is blocked by Screener, the client runs local scraping on Oracle VM (unblocked) and pushes verified data to Render to persist to Supabase with zero database credentials on client.
-- **Unit Test Suite:** **244 tests passing locally** with `git diff --check` clean.
+- **Unit Test Suite:** **246 tests passing locally** with `git diff --check` clean.
 
 ### Deployed & Live-Verified
-- **Render Live Security & Persistence Deployment:** Deployed commit `c819979` on Render. Verified:
-  - `GET /health` returns HTTP 200 with active commit tracking (`commit: c819979`).
+- **Render Live Security & Persistence Deployment:** Deployed commit `c819979` / `624fa9c` on Render. Verified:
+  - `GET /health` returns HTTP 200 with active commit tracking.
   - Render environment configured with `RESEARCH_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_URL`.
   - Client runner (`skills/stock-research/run.py`) functions with only `RESEARCH_API_KEY` (zero DB credentials on client).
   - Hybrid persistence verified end-to-end: Oracle VM scrapes verified fundamentals, pushes to Render API `POST /research/persist`, and persists to Supabase with zero audit warnings (recommendation ID: `49dbfab0-b72d-44a0-89ab-e3a13b32735a`).
-- **Live Supabase Multi-Day Track Record:** Verified baseline for `TCS` established Oct 15 (₹2,350.00) vs Oct 19 run (₹2,460.90, +4.72% price return, `HOLD_REVIEW` ➔ `AVOID_NEW_ENTRY` transition) cleanly computed from Supabase. Live baseline established for `INFY` (Oct 19, CMP ₹1,130.70, P/E 14.70x, ROCE 40.0%, ROE 31.9%, D/E 0.10, PEG 1.84, rec ID `75f4f39c-1ad2-4a40-add9-45723be08191`).
+- **Live Supabase Multi-Day Track Record:** Verified baseline for `TCS` established Oct 15 (₹2,350.00) vs Oct 19 run (₹2,460.90, +4.72% price return, `HOLD_REVIEW` ➔ `AVOID_NEW_ENTRY` transition) cleanly computed from Supabase. Live baseline established for `INFY` (Oct 19, CMP ₹1,130.70, P/E 14.70x, ROCE 40.0%, ROE 31.9%, D/E 0.10, PEG 1.84, rec ID `75f4f39c-1ad2-4a40-add9-45723be08191`). Instant 6-hour cache hit verified live on Oracle VM with zero warnings.
 
 ### Remaining Work
 1. **OpenClaw Skill Integration:** Mount `skills/stock-research/` into OpenClaw workspace on the Oracle VM.
