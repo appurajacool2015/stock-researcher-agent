@@ -1,6 +1,6 @@
 # PROGRESS.md — Stock Researcher Agent
 *Last Updated: 2026-10-19*
-*Last Session: 2026-10-19 (Cloud Screener Resilience, Retries, and Partial Failure Handling)*
+*Last Session: 2026-10-19 (Persistence Endpoint Bugfix and Hybrid Fallback Recovery)*
 
 ## 1. Purpose
 Deterministic stock research and rule-based investment assessment engine for Indian listed equities (NSE/BSE). Collects verifiable factual data, computes indicators, derives audit-grade classifications, tracks performance against research baselines, and evaluates entry buying zones.
@@ -19,11 +19,11 @@ Deterministic stock research and rule-based investment assessment engine for Ind
 - **Buying Zone Assessment (Phase 1):** Deterministic 5-label entry evaluator (`intelligence/buying_zone.py`) computing invalidation levels, targets, and reward-to-risk ratios.
 - **Key Metrics & Fundamentals Enhancement:** Added Balance Sheet fallback in `adapters/screener.py` for Debt-to-Equity (borrowings/equity calculation and 0.00x zero-debt resolution) and deterministic PEG calculation in `intelligence/investment_assessment.py`.
 - **Screener Resilience & Retries:** Added realistic browser headers, HTTPAdapter retries with backoff, standalone URL fallback, and graceful partial failure handling (`overall_status: PARTIAL`, source `FAILED`, errors preserved) so single-source blocks never crash the server.
-- **Hybrid Cloud/Local Persistence:** Implemented authenticated `POST /research/persist` in `interfaces/api.py` and client auto-recovery in `skills/stock-research/run.py` (`6ef2923`). If Render's cloud IP is blocked by Screener, the client runs local scraping on Oracle VM (unblocked) and pushes verified data to Render to persist to Supabase with zero database credentials on client.
-- **Unit Test Suite:** **243 tests passing locally** with `git diff --check` clean.
+- **Hybrid Cloud/Local Persistence:** Implemented authenticated `POST /research/persist` in `interfaces/api.py` and client auto-recovery in `skills/stock-research/run.py` (`6ef2923`, `ef439dd`). If Render's cloud IP is blocked by Screener, the client runs local scraping on Oracle VM (unblocked) and pushes verified data to Render to persist to Supabase with zero database credentials on client.
+- **Unit Test Suite:** **244 tests passing locally** with `git diff --check` clean.
 
 ### Deployed & Live-Verified
-- **Render Live Security & Persistence Deployment:** Deployed commit `6ef2923` on Render. Verified:
+- **Render Live Security & Persistence Deployment:** Deployed commit `ef439dd` on Render. Verified:
   - `GET /health` returns HTTP 200 without credentials.
   - Render environment configured with `RESEARCH_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and `SUPABASE_URL`.
   - Client runner (`skills/stock-research/run.py`) functions with only `RESEARCH_API_KEY`.
@@ -47,6 +47,7 @@ Deterministic stock research and rule-based investment assessment engine for Ind
 - **2026-10-17:** Implemented Balance Sheet fallback for Debt-to-Equity (0.10x for TCS) and deterministic PEG ratio (2.04 for TCS) in Key Metrics table; added dedicated `test_screener.py` (237 tests).
 - **2026-10-19:** Added browser headers, retry adapter with exponential backoff, and graceful partial fallback handling in `services/research_pipeline.py` (`2fa8465`); added cache-bypass `--force-refresh` plumbing across client and REST API (240 tests).
 - **2026-10-19:** Implemented authenticated `POST /research/persist` on Render API and hybrid recovery in client runner (`6ef2923`) so Oracle VM scrapes Screener unblocked and pushes full verified fundamentals to Supabase (243 tests).
+- **2026-10-19:** Fixed save_recommendation argument mismatch in `interfaces/api.py` and `services/supabase_repo.py` (`ef439dd`); 244 tests passing.
 
 ## 5. Risks and Open Issues
 - **Upcoming Earnings Calendar:** Public feeds currently lack forward quarterly results calendar; event risk remains unmodeled.
